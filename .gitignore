@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+.gradle-home/
+build/
+*/build/
+
+# Local machine config
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Captured device logs pulled from real devices
+captures/
+# Release signing — NEVER commit keys or passwords
+keystore/
+*.jks
+*.keystore
+signing.properties
+
+# Sandbox-local Gradle/Android homes
+.android-home/
+captures/

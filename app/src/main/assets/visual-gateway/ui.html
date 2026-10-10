@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<!-- visual-gateway/ui.html — the loopback chat UI for CLI-only agents.
+     Served by gateway.js. The Android WebView loads it and the existing
+     dsh-mobile-shell.js mobile transformation applies on top.
+     Transport: SSE (/events) for agent output, POST /send for user input. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Agent Gateway</title>
+<style>
+  :root { --bg:#0B0F14; --card:#151B24; --text:#E8EDF3; --muted:#9AA4B2; --accent:#4DA3FF; --line:rgba(255,255,255,.10); }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    display:flex; flex-direction:column; height:100dvh; }
+  header { padding:12px 16px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; gap:10px; padding-top:calc(12px + env(safe-area-inset-top)); }
+  header .dot { width:10px; height:10px; border-radius:50%; background:#3ED598; flex:0 0 auto; }
+  header .dot.err { background:#FF6B6B; }
+  header b { font-size:15px; }
+  header small { color:var(--muted); font-size:12px; }
+  header .sp { flex:1; }
+  #chat { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px;
+    -webkit-overflow-scrolling:touch; }
+  .msg { max-width:92%; padding:11px 13px; border-radius:14px; white-space:pre-wrap;
+    word-break:break-word; line-height:1.45; font-size:15px; }
+  .msg.assistant { align-self:flex-start; background:var(--card); }
+  .msg.user { align-self:flex-end; background:#1D2B3F; }
+  .msg.err { align-self:flex-start; background:#3A1F24; color:#FFD7D7; font-size:13px; }
+  .msg.sys { align-self:center; background:transparent; color:var(--muted); font-size:12px; }
+  form { display:flex; gap:8px; padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--line); background:var(--bg); }
+  input { flex:1; background:var(--card); border:1px solid var(--line); border-radius:12px;
+    color:var(--text); padding:12px; font-size:16px; min-width:0; }
+  input:focus { outline:none; border-color:var(--accent); }
+  button { background:var(--accent); border:none; border-radius:12px; color:#04121F;
+    font-weight:700; padding:0 16px; font-size:15px; }
+  button:disabled { opacity:.45; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <div><b id="agent-name">Agent</b><br /><small id="status">connecting…</small></div>
+</header>
+<div id="chat"><div class="msg sys">Connected to visual gateway.</div></div>
+<form id="composer">
+  <input id="box" placeholder="Message the agent…" autocomplete="off" autocapitalize="sentences" />
+  <button type="submit" id="send">Send</button>
+</form>
+<script>
+(function () {
+  'use strict';
+  var chat = document.getElementById('chat');
+  var box = document.getElementById('box');
+  var form = document.getElementById('composer');
+  var sendBtn = document.getElementById('send');
+  var statusEl = document.getElementById('status');
+  var dot = document.getElementById('dot');
+
+  function addMsg(text, who) {
+    var d = document.createElement('div');
+    d.className = 'msg ' + who;
+    d.textContent = text;
+    chat.appendChild(d);
+    chat.scrollTop = chat.scrollHeight;
+    // Cap the DOM so long sessions stay fast on mobile.
+    while (chat.children.length > 300) chat.removeChild(chat.firstChild);
+    return d;
+  }
+
+  function setStatus(text, isErr) {
+    statusEl.textContent = text;
+    dot.className = isErr ? 'dot err' : 'dot';
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var v = box.value.trim();
+    if (!v) return;
+    box.value = '';
+    sendBtn.disabled = true;
+    fetch('/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: v })
+    }).then(function (r) {
+      sendBtn.disabled = false;
+      if (!r.ok) addMsg('Backend not running — restart the engine.', 'err');
+    }).catch(function () {
+      sendBtn.disabled = false;
+      addMsg('Could not reach the gateway.', 'err');
+    });
+  });
+
+  // SSE from the gateway.
+  var es = new EventSource('/events');
+  es.onopen = function () { setStatus('connected'); };
+  es.onerror = function () { setStatus('reconnecting…', true); };
+  es.onmessage = function (ev) {
+    var e;
+    try { e = JSON.parse(ev.data); } catch (_) { return; }
+    if (e.type === 'message' || e.type === 'echo') {
+      addMsg(e.text, e.type === 'echo' ? 'user' : 'assistant');
+    } else if (e.type === 'approval') {
+      // Surface to the NATIVE Bottom Sheet via the Android bridge. The app
+      // answers by calling __gatewayResolve below; nothing is auto-approved.
+      addMsg('Waiting for your approval: ' + e.summary, 'sys');
+      if (window.DshBridge && DshBridge.postApprovalRequest) {
+        try {
+          DshBridge.postApprovalRequest(JSON.stringify({
+            id: 'web-appr-' + Date.now() + '-' + e.summary.length,
+            summary: e.summary,
+            source: 'gateway-sse'
+          }));
+        } catch (err) { /* bridge unavailable */ }
+      }
+    } else if (e.type === 'exit') {
+      addMsg('Backend exited (code ' + e.code + ').', 'err');
+      setStatus('backend exited', true);
+    } else if (e.type === 'error') {
+      addMsg('Backend error: ' + e.message, 'err');
+      setStatus('backend error', true);
+    }
+  };
+
+  // Health probe keeps the header honest.
+  function ping() {
+    fetch('/health').then(function (r) { return r.json(); }).then(function (h) {
+      if (!h || !h.ok) setStatus('unhealthy', true);
+    }).catch(function () { setStatus('gateway unreachable', true); });
+  }
+  ping();
+  setInterval(ping, 5000);
+
+  // Native bridge hooks used by Android (also handy for manual testing).
+  window.__gatewayDelta = function (text) { addMsg(text, 'assistant'); };
+  window.__dshInsertCommand = function (text) {
+    addMsg(text, 'user');
+    fetch('/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).catch(function () {});
+  };
+  // Called by dsh-mobile-shell.js when the user taps Approve/Deny on the
+  // native sheet. gateway.js owns the CLI's stdin, so the answer goes here.
+  window.__gatewayResolve = function (approved) {
+    return fetch('/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: approved ? 'yes' : 'no' })
+    }).then(function (r) { return r.ok; }).catch(function () { return false; });
+  };
+})();
+</script>
+</body>
+</html>

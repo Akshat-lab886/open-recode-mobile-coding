@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "comment": [
+    "Runtime payload manifest for OPEN RECODE (mobile coding).",
+    "No binaries are committed to this repository by design: Node.js publishes",
+    "no Android/arm64 build, so the runtime cannot be vendored and verified",
+    "without a physical device. Instead the app downloads these on first run",
+    "and verifies each against sha256 before use.",
+    "",
+    "baseUrl: root URL these assets are fetched from. It is intentionally",
+    "EMPTY here because this repository does not host them. Either set it to",
+    "a release/CDN you control, or override it at runtime from the Control",
+    "Center ('Payload source'). Until then the app reports a precise",
+    "'not configured' state instead of failing cryptically.",
+    "",
+    "To host a payload: put each file in a directory laid out as the 'path'",
+    "field below, record its real sha256, and point baseUrl at that directory."
+  ],
+  "baseUrl": "",
+  "assets": [
+    {
+      "id": "proot",
+      "path": "proot",
+      "url": "",
+      "sha256": "",
+      "sizeBytes": 0,
+      "required": true,
+      "installMode": "0755",
+      "description": "PRoot ARM64 static binary (rootless Linux syscall translator)"
+    },
+    {
+      "id": "rootfs",
+      "path": "rootfs.tar.gz",
+      "url": "",
+      "sha256": "",
+      "sizeBytes": 0,
+      "required": true,
+      "installMode": "0644",
+      "description": "Minimal Linux rootfs (e.g. Alpine minirootfs aarch64); extracted by bootstrap.sh"
+    },
+    {
+      "id": "node",
+      "path": "node.tar.xz",
+      "url": "",
+      "sha256": "",
+      "sizeBytes": 0,
+      "required": true,
+      "installMode": "0644",
+      "description": "Node.js runtime built for Android arm64; must unpack to node/bin/node"
+    }
+  ]
+}
