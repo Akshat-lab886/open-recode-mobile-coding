@@ -167,6 +167,36 @@ class ProotWrapContractTest {
     }
 
     @Test
+    fun `manifest field names match what the parser reads`() {
+        // Regression guard. An earlier revision of runtime-assets.json used
+        // name/size/target/mode while RuntimeAssets.kt parses
+        // id/sizeBytes/installMode. Every asset was silently dropped, the
+        // manifest parsed empty, and the sizeBytes integrity check degraded to
+        // "skip" because the value read as 0. Nothing failed until a device
+        // refused to start, so these key names are pinned here.
+        val json = File("src/main/assets/runtime-assets.json").let { f ->
+            if (f.exists()) f.readText() else File("app/src/main/assets/runtime-assets.json").readText()
+        }
+        for (key in listOf("\"id\"", "\"url\"", "\"sha256\"", "\"sizeBytes\"", "\"installMode\"")) {
+            assertTrue("manifest must declare $key", json.contains(key))
+        }
+        // The old names must be gone, otherwise someone will add them back
+        // believing they are read.
+        for (key in listOf("\"name\"", "\"size\"", "\"target\"", "\"mode\"")) {
+            assertFalse("manifest must not use $key; the parser ignores it", json.contains(key))
+        }
+        val manifest = RuntimeAssetManifest.parse(json)
+        assertTrue("assets parsed", manifest.assets.isNotEmpty())
+        for (asset in manifest.assets) {
+            assertTrue(
+                "asset ${asset.id} has sizeBytes=0; integrity would be skipped",
+                asset.sizeBytes > 0L,
+            )
+            assertEquals("asset ${asset.id} must be 64 hex chars", 64, asset.sha256.length)
+        }
+    }
+
+    @Test
     fun `dsh entry point matches what npm actually installs`() {
         // VERIFIED on-device: npm lays the package out at
         // <agents>/lib/node_modules/@deepseek-ai/dsh/lib/bin.js and declares

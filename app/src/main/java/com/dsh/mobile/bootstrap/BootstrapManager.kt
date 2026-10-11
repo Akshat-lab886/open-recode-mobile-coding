@@ -102,12 +102,15 @@ class BootstrapManager(private val appContext: Context) {
             // process.cwd == filesDir does not exist under runtimeRoot, so the
             // guest cannot see it. `run-as` inherited a CWD that did exist,
             // which is why manual testing never reproduced this.
+            val nativeLibsDir = unpackNativeLibs(File(appContext.filesDir, "nativelibs-root"))
+
             val process = ProcessBuilder("sh", script.absolutePath)
                 .directory(runtimeRoot)
                 .apply {
                     // Keep PATH functional on-device; script resolves the rest.
                     environment()["RUNTIME_ROOT"] = runtimeRoot.absolutePath
                     environment()["NATIVE_LIB_DIR"] = appContext.applicationInfo.nativeLibraryDir
+                    environment()["NATIVE_LIBS_DIR"] = nativeLibsDir.absolutePath
                     environment()["ROOTFS_TAR"] =
                         File(runtimeRoot, "rootfs.tar.gz").absolutePath
                     // Node ships inside the rootfs, so the "node dir" IS the
@@ -182,6 +185,44 @@ class BootstrapManager(private val appContext: Context) {
                 retryable = true,
             )
         }
+    }
+
+    /**
+     * Unpacks assets/nativelibs into app-private storage.
+     *
+     * The bionic Node interpreter ships as a jniLib so that it is extracted to
+     * nativeLibraryDir, which is the only app location where execve is still
+     * permitted at targetSdk 29+ (execute_no_trans blocks the writable data
+     * dir). Its shared libraries cannot go the same route: AGP only packages
+     * jniLibs files matching `lib*.so`, so versioned SONAMEs like libz.so.1,
+     * libssl.so.3 and libicuuc.so.78 would be silently dropped and the loader
+     * would then fail with "library not found".
+     *
+     * They are shipped as assets instead and written to filesDir, which needs
+     * no exec permission - the dynamic linker only reads and mmaps them.
+     */
+    private fun unpackNativeLibs(targetDir: File): File {
+        val dir = File(targetDir, "nativelibs").apply { mkdirs() }
+        val names = appContext.assets.list("nativelibs") ?: return dir
+        var extracted = 0
+        for (name in names) {
+            val out = File(dir, name)
+            // Cheap freshness check: same size means the bundled asset has not
+            // changed, so skip the copy on every boot.
+            val assetSize = runCatching {
+                appContext.assets.openFd("nativelibs/$name").use { it.length }
+            }.getOrDefault(-1L)
+            if (out.exists() && assetSize > 0 && out.length() == assetSize) continue
+            appContext.assets.open("nativelibs/$name").use { input ->
+                out.outputStream().use { output -> input.copyTo(output) }
+            }
+            runCatching { out.setReadable(true, false) }
+            extracted++
+        }
+        if (extracted > 0) {
+            appendLog(">>>LOG:unpacked $extracted native librar" + if (extracted == 1) "y" else "ies")
+        }
+        return dir
     }
 
     /** Copies the asset script to app-private storage and makes it executable. */

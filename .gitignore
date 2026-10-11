@@ -27,3 +27,12 @@ captures/
 # Built on demand by tools/build-termux-node-payload.py (~110 MB of
 # bionic-linked binaries). Never committed - rebuild them, do not vendor.
 app/src/main/jniLibs/
+
+# Same tool, other half of the payload. The interpreter goes to jniLibs so AGP
+# extracts it to nativeLibraryDir (the only app location where execve is
+# permitted at targetSdk 29+). Its shared libraries cannot: AGP packages only
+# jniLibs entries matching `lib*.so`, so versioned SONAMEs such as libz.so.1,
+# libssl.so.3 and libicuuc.so.78 would be silently dropped and the dynamic
+# loader would fail with "library not found". They ship as assets instead and
+# are unpacked to filesDir at runtime.
+app/src/main/assets/nativelibs/

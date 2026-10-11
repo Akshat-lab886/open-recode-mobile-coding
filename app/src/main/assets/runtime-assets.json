@@ -1,34 +1,47 @@
 {
   "schema": 1,
   "generated": "2026-10-11",
+  "baseUrl": "",
   "notes": [
-    "Two artifacts ship the runtime. Node is NOT one of them: it is Alpine's",
-    "own nodejs apk packed inside rootfs.tar.gz at /usr/bin/node.",
-    "Do NOT substitute a nodejs.org linux-arm64 tarball. That build is glibc",
-    "and this rootfs is musl; there is no libc.so.6, so it will not load and",
-    "the failure looks like a missing file rather than a wrong libc.",
-    "Build or refresh these with tools/build-alpine-rootfs.py."
+    "Field names here MUST match RuntimeAssets.kt, which parses id, path, url,",
+    "sha256, sizeBytes, required and installMode. An earlier revision of this",
+    "file used name/size/target/mode instead, which the parser silently",
+    "ignored: every asset dropped out, the manifest loaded empty, and the",
+    "sizeBytes integrity check degraded to 'skip' because it parsed as 0.",
+    "ProotWrapContractTest now pins these key names so that drift fails a unit",
+    "test instead of only surfacing on a device.",
+    "",
+    "The bionic Node runtime does NOT come from here. It ships inside the APK:",
+    "the interpreter is a jniLib (so AGP extracts it to nativeLibraryDir, the",
+    "only app location where execve is permitted at targetSdk 29+), and its",
+    "shared libraries are assets under assets/nativelibs, unpacked to filesDir",
+    "and located via LD_LIBRARY_PATH. Build both with",
+    "tools/build-termux-node-payload.py.",
+    "",
+    "PRoot + this rootfs remain the fallback runtime path."
   ],
   "assets": [
     {
-      "name": "proot",
+      "id": "proot",
+      "path": "proot",
       "arch": "arm64-v8a",
       "url": "https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64-static",
       "sha256": "fa10b1a7818c2f5b1dcb5834450570c368c9ecf66d31521509621b95c4538a45",
-      "size": 1479432,
-      "target": "proot",
-      "mode": "0755",
-      "required": true
+      "sizeBytes": 1479432,
+      "installMode": "0755",
+      "required": true,
+      "description": "PRoot 5.3.0, static aarch64. Runs the musl/Alpine guest inside the app sandbox."
     },
     {
-      "name": "rootfs",
+      "id": "rootfs",
+      "path": "rootfs.tar.gz",
       "arch": "arm64-v8a",
       "url": "https://github.com/Akshat-lab886/open-recode-mobile-coding/releases/download/v0.2.0/rootfs.tar.gz",
       "sha256": "65f6bbf468085c65d5311045d88cbc29082750f6295cfb330680a44234c1fb82",
-      "size": 46610202,
-      "target": "rootfs.tar.gz",
-      "mode": "0644",
-      "required": true
+      "sizeBytes": 46610202,
+      "installMode": "0644",
+      "required": true,
+      "description": "Alpine 3.22 aarch64 (musl 1.2.5) with Node at /usr/bin/node. Patch the musl loader with tools/patch-musl-faccessat2.py before repacking, then recompute this sha256 and sizeBytes."
     }
   ]
 }

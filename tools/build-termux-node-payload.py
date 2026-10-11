@@ -207,13 +207,19 @@ def main() -> int:
                 continue
             base = m.name.rsplit("/", 1)[-1]
             if pkg == "nodejs" and base == "node":
+                # Must be named lib*.so: AGP only packages files matching that
+                # pattern from jniLibs, and anything in jniLibs is extracted to
+                # nativeLibraryDir - which is the only app location where
+                # execve is allowed at targetSdk 29+ (filesDir is blocked by
+                # execute_no_trans). That property is the whole reason we
+                # ship the interpreter as a "library".
+                dest = os.path.join(args.out, "libnode.so")
                 data = tf.extractfile(m).read()
-                (open(os.path.join(args.out, "node"), "wb") if not args.dry_run else None)
                 if not args.dry_run:
-                    with open(os.path.join(args.out, "node"), "wb") as fh:
+                    with open(dest, "wb") as fh:
                         fh.write(data)
-                    os.chmod(os.path.join(args.out, "node"), 0o755)
-                log(f"   node: {len(data)} bytes")
+                    os.chmod(dest, 0o755)
+                log(f"   node -> libnode.so: {len(data)} bytes")
             elif ".so" in base:
                 data = tf.extractfile(m).read()
                 staged[base] = data
@@ -221,7 +227,7 @@ def main() -> int:
             continue
 
     # Resolve Node's actual DT_NEEDED and make sure every name is present.
-    node_path = os.path.join(args.out, "node")
+    node_path = os.path.join(args.out, "libnode.so")
     if os.path.exists(node_path):
         with open(node_path, "rb") as fh:
             needed = elf_needed(fh.read())
