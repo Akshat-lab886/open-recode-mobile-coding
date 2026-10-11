@@ -23,3 +23,7 @@ signing.properties
 # Sandbox-local Gradle/Android homes
 .android-home/
 captures/
+
+# Built on demand by tools/build-termux-node-payload.py (~110 MB of
+# bionic-linked binaries). Never committed - rebuild them, do not vendor.
+app/src/main/jniLibs/

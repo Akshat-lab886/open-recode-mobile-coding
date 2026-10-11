@@ -107,6 +107,7 @@ class BootstrapManager(private val appContext: Context) {
                 .apply {
                     // Keep PATH functional on-device; script resolves the rest.
                     environment()["RUNTIME_ROOT"] = runtimeRoot.absolutePath
+                    environment()["NATIVE_LIB_DIR"] = appContext.applicationInfo.nativeLibraryDir
                     environment()["ROOTFS_TAR"] =
                         File(runtimeRoot, "rootfs.tar.gz").absolutePath
                     // Node ships inside the rootfs, so the "node dir" IS the

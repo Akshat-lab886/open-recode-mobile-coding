@@ -13,6 +13,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
+        android:extractNativeLibs="true"
         android:name=".DshMobileApp"
         android:label="DSH Mobile"
         android:theme="@style/Theme.DshMobile"

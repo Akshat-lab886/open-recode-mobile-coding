@@ -30,7 +30,7 @@ android {
         // Termux, the canonical Android terminal, uses targetSdk 28 for exactly
         // this reason. Trade-off: this APK must be sideloaded (it is published
         // on GitHub Releases, not the Play Store, which mandates 34+).
-        targetSdk = 28
+        targetSdk = (project.findProperty("dshTargetSdk") as String?)?.toInt() ?: 28
 
         // Paired with the targetSdk note above: this APK is sideloaded from
         // GitHub Releases, never the Play Store. Play mandates 34+, which would
