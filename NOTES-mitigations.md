@@ -208,3 +208,104 @@ Both were found by reading the actual error, not by reasoning about it:
   does not yet install on-device: npm dies with a `Bus error` (mmap failure)
   on this device's 1.7 GB of free space. Small installs are fine.
 - PRoot + the patched rootfs stays as a fallback runtime.
+
+---
+
+# The agent itself: how far it actually gets
+
+Building the runtime was only the first half. This is the measured state of
+`@deepseek-ai/dsh` running inside the app.
+
+## Getting the agent onto the device at all
+
+`npm install @deepseek-ai/dsh` on the device **dies with a Bus error**. That is
+not a dependency problem: this device has 3.7 GB RAM with ~1 GB available, and
+npm resolving a ~540-package tree exhausts it. Small installs are fine
+(`is-odd` -> "added 2 packages in 3s").
+
+So the tree is assembled on the host and shipped, the same way the rootfs is:
+
+```
+npm install -g @deepseek-ai/dsh --ignore-scripts   # pure JS, so host-built is valid
+rsync/prune -> tar.gz -> 39 MB -> adb/files -> extract
+```
+
+Pruning that mattered: `.map` files, docs/tests, and every prebuild for a
+platform that is not ours. 288 MB -> 197 MB.
+
+## Two native modules had to be built for bionic
+
+Neither ships a binary our Node could load:
+
+**Koffi (FFI, needed by the subprocess and sandbox loaders).** It resolves its
+native module from `process.platform`, and on Android that is `android`, so
+`@koromix/koffi-android-arm64` is the correct package - it does exist, and it
+is bionic-linked. Easy to miss: `npm` on the host installs only the *host*
+platform's optional dependency, so the Android build is absent by default and
+dsh fails with "Cannot find the native Koffi module; did you bundle it
+correctly?". Verified loading under bionic: `KOFFI-LOADED function`.
+
+**node-pty (`pty.node`).** node-pty ships no Android prebuild, so it has to be
+compiled. `tools/build-termux-node-payload.py`'s sibling logic, done with NDK
+28.2 and the Node headers from Termux's own `nodejs` apk:
+
+```sh
+aarch64-linux-android24-clang++ -shared -fPIC -O2 -std=gnu++17 \
+  -static-libstdc++ -include pty.h \
+  -I<termux>/include/node -I<node-addon-api> \
+  -DNAPI_VERSION=8 -DNODE_GYP_MODULE_NAME=pty -DBUILDING_NODE_EXTENSION \
+  src/unix/pty.cc src/unix/spawn-helper.cc -o pty.node
+```
+
+Three things that are easy to get wrong:
+- `forkpty`/`openpty` are in `<pty.h>` on bionic, not `<util.h>`, and they are
+  `__INTRODUCED_IN(23)` - building against `android21` compiles fine and then
+  fails to *link*, because the declarations are hidden at that API level.
+- `-static-libstdc++` avoids depending on Termux's `libc++_shared.so`, whose
+  ABI version need not match the NDK's.
+- Verified by DT_NEEDED: `libc.so`, `libm.so`, `libdl.so` - bionic, not
+  `libc.so.6`.
+
+Confirmed working: `pty.spawn('/system/bin/sh', ...)` -> `PTY-HELLO`, exit 0.
+
+## dsh also requires `--expose-internals`
+
+Without it the plugin tree refuses to load:
+`cordis-plugin-hmr: --expose-internals is required for HMR service`.
+
+## Where it stands
+
+`dsh --version` -> `0.1.5-rc.1`.
+
+`dsh web --host 127.0.0.1 --port <p> --no-open` **starts and prints its URL**:
+
+```
+dsh web: http://127.0.0.1:3087/?token=...
+```
+
+The plugin tree loads, Koffi loads, node-pty spawns real PTYs. It then dies
+within seconds, before the port accepts a connection, with SIGBUS or SIGSEGV
+varying between runs. That variance is the tell: a code fault has one fault
+address and one frame, whereas this is a resource ceiling being hit at
+varying allocation points. Consistent with the device's ~1 GB available RAM
+against the agent's heap plus a 197 MB module tree.
+
+So the runtime problem is solved and the agent boots; what remains is making it
+survive on a memory-constrained device, then wiring it into `AgentRuntime` so
+the app drives it instead of a hand-run shell command.
+
+### One false lead worth recording
+
+A probe run failed with:
+
+```
+libicudata.so.78 has invalid shdr offset/size: 33108192/640
+CANNOT LINK EXECUTABLE libnode.so
+```
+
+This looked like a corrupt ICU blob, but the file is fine: its section header
+table ends exactly at EOF (33108192 + 10*64 = 33108832 = file size), and
+`node -e "new Intl.DateTimeFormat()..."` formats a date correctly both before
+and after. It was a transient read of a file being rewritten by the asset
+unpacker. Verify against a live run before chasing a corruption that is not
+there.
