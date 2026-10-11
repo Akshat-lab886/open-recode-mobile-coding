@@ -73,8 +73,8 @@ class DiagnosticsStore(private val appContext: Context) {
             appendLine("--- agent log (${s.agentLogFile}) ---")
             appendLine(s.agentLog.ifBlank { "(empty)" })
             appendLine()
-            appendLine("--- harness.log (${s.harnessLogFile}) ---")
-            appendLine(s.harnessLog.ifBlank { "(not written by this backend)" })
+            appendLine("--- harness config (${s.harnessLogFile}) ---")
+            appendLine(s.harnessLog.ifBlank { "(no harness config found)" })
             appendLine()
             appendLine("--- bootstrap.log ---")
             appendLine(s.bootstrapLog.ifBlank { "(empty)" })
@@ -114,15 +114,32 @@ class DiagnosticsStore(private val appContext: Context) {
         )
     }
 
+    /**
+     * The real on-disk state of the harness.
+     *
+     * VERIFIED: `dsh` writes **no log file at all** — there is no
+     * `~/.dsh/logs/` directory. A live install contains only `.anonymous-user-id`,
+     * `settings.yaml`, `sessions/`, `storages/`, `profiles/` and
+     * `attachments/`. Agent output reaches us through the stdout/stderr tee in
+     * [com.dsh.mobile.service.AgentLaunch] instead.
+     *
+     * So this surfaces the config files that genuinely exist and genuinely
+     * explain a failure (wrong port, broken profile), not a phantom log.
+     */
     private fun harnessLogFile(): File {
-        // Harness writes under its home dir; inside our runtime that maps to
-        // <runtimeRoot>/.dsh/logs/harness.log. Also probe the legacy ~/.dsh
-        // location for rooted/host-side runs.
-        val inRuntime = File(AgentRuntime.runtimeRoot(appContext), ".dsh/logs/harness.log")
-        if (inRuntime.exists()) return inRuntime
-        val legacy = File(System.getProperty("user.home").orEmpty(), ".dsh/logs/harness.log")
-        return if (legacy.exists()) legacy else inRuntime
+        val home = File(System.getProperty("user.home").orEmpty())
+        // In-runtime home first (this is where the packaged agent lives).
+        val candidates = listOf(
+            File(AgentRuntime.runtimeRoot(appContext), ".dsh/settings.yaml"),
+            File(AgentRuntime.runtimeRoot(appContext), ".dsh/profiles/web/cordis.yml"),
+            File(home, ".dsh/settings.yaml"),
+            File(home, ".dsh/profiles/web/cordis.yml"),
+        )
+        return candidates.firstOrNull { it.exists() && !isDenied(it) }
+            ?: File(AgentRuntime.runtimeRoot(appContext), ".dsh/settings.yaml")
     }
+
+    private fun isDenied(file: File): Boolean = SensitivePaths.isDenied(file)
 
     private fun tail(file: File, maxChars: Int): String {
         if (!file.exists() || !file.canRead()) return ""
@@ -144,6 +161,10 @@ class DiagnosticsStore(private val appContext: Context) {
     /** Strips key-shaped secrets before display/export. Never logs raw keys. */
     private fun redact(text: String): String {
         var out = text
+        // `dsh web` prints its authenticated entry URL into the agent log as
+        // `…/?token=<secret>`. That token is the live credential for the whole
+        // local session, so it must never survive into a pasted bug report.
+        out = TOKEN_QUERY_RE.replace(out, "token=***REDACTED***")
         // sk-… / ds-… / or-… tokens and long bare hex/base64 runs.
         out = KEY_TOKEN_RE.replace(out, "***REDACTED***")
         out = LONG_SECRET_RE.replace(out, "***REDACTED***")
@@ -175,6 +196,8 @@ class DiagnosticsStore(private val appContext: Context) {
                 "ds_[A-Za-z0-9\\-_]+|Bearer\\s+[A-Za-z0-9\\-_.~+/=]+)",
         )
         val LONG_SECRET_RE = Regex("\\b[A-Za-z0-9_\\-]{40,}\\b")
+        // Session token in the agent's own launch URL.
+        val TOKEN_QUERY_RE = Regex("token=[^&\\s]+")
         val ENV_ASSIGN_RE = Regex(
             "(?i)(DEEPSEEK_API_KEY|DSH_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|OPENAI_API_KEY)\\s*=\\s*[^\\s]+",
         )

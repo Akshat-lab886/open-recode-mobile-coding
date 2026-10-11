@@ -21,6 +21,7 @@ import com.dsh.mobile.runtime.RuntimePayloadState
 import com.dsh.mobile.ui.AgentServiceStatusFlow
 import com.dsh.mobile.ui.GatewayEventBus
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -31,6 +32,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * SERVICE ORCHESTRATION — mounts directories, injects keys, boots agents.
@@ -175,6 +177,12 @@ class AgentRuntimeService : LifecycleService() {
                 setStatus(ServiceStatus.Booting("Mounting workspace…"))
                 prepareMounts(workspace)
 
+                // PRoot guests need a resolv.conf; a stock Alpine minirootfs
+                // has none, so agent installs would fail on DNS.
+                if (AgentRuntime.isProotActive(this@AgentRuntimeService)) {
+                    AgentRuntime.ensureGuestDns(this@AgentRuntimeService)
+                }
+
                 // 2. Inject API keys silently as env vars.
                 val apiEnv = app.vault.asEnvironment()
                 val env = AgentRuntime.buildEnvironment(
@@ -182,6 +190,8 @@ class AgentRuntimeService : LifecycleService() {
                     workspace = workspace,
                     mode = config.mode,
                     port = port,
+                    insideProot = AgentRuntime.isProotActive(this@AgentRuntimeService),
+                    prootTmpDir = AgentRuntime.prootTmpDir(this@AgentRuntimeService),
                 )
                 if (apiEnv.isEmpty()) {
                     Log.w(TAG, "no API keys stored — agent will boot unauthenticated")
@@ -196,19 +206,31 @@ class AgentRuntimeService : LifecycleService() {
                     port = port,
                 )
                 Log.i(TAG, "exec: ${command.joinToString(" ")}")
+
+                // stdout is teed to the log AND scanned: `dsh web` prints its
+                // real tokenized entry URL there, and that token is the only
+                // thing that authenticates — the bare origin answers 401.
+                val launchUrl = AtomicReference<String?>(null)
+                val logFile = AgentRuntime.logFile(this@AgentRuntimeService, config.agent)
+
                 val process = withContext(Dispatchers.IO) {
                     ProcessBuilder(command)
                         .directory(workspace)
                         .apply {
                             environment().putAll(env)
                             redirectErrorStream(false)
-                            AgentRuntime.logFile(
-                                this@AgentRuntimeService, config.agent,
-                            ).let { redirectOutput(ProcessBuilder.Redirect.appendTo(it)) }
                         }
                         .start()
                 }
                 child = process
+
+                AgentLaunch.pump(process.inputStream, logFile, launchUrl) { line ->
+                    Log.d(TAG, "[agent] ${AgentLaunch.redactUrl(line)}")
+                }
+                // stderr is appended to the same log so diagnostics see it.
+                AgentLaunch.pump(process.errorStream, logFile) { line ->
+                    Log.w(TAG, "[agent:err] ${AgentLaunch.redactUrl(line)}")
+                }
 
                 // 4. CLI-only agents run under visual-gateway/gateway.js,
                 // which OWNS the real CLI's stdin/stdout. VisualGateway must
@@ -217,7 +239,7 @@ class AgentRuntimeService : LifecycleService() {
                 // gateway.js never reads. Approvals instead travel
                 // gateway SSE -> DshBridge -> native sheet, and answers go
                 // back via POST /send. Logs still reach dsh-logs/ because the
-                // child's stdout/stderr are redirected above.
+                // child's stdout/stderr are pumped above.
                 gateway = null
 
                 // 5. Health-check the loopback port, then go live.
@@ -227,12 +249,25 @@ class AgentRuntimeService : LifecycleService() {
                     "Agent did not open 127.0.0.1:$port in time — see dsh-logs.",
                 )
 
+                // Prefer the agent's own authenticated URL when it printed
+                // one. Backends that print nothing (the visual gateway) fall
+                // back to the plain origin, which is correct for them.
+                val origin = "http://${AgentRuntime.LOOPBACK_HOST}:$port"
+                var entryUrl = origin
+                // Bounded wait: the banner is printed during startup, so this
+                // normally returns almost immediately. On timeout we keep the
+                // plain origin, which is correct for the visual gateway.
+                withTimeoutOrNull(2_500) {
+                    while (launchUrl.get() == null) delay(100)
+                    entryUrl = launchUrl.get() ?: origin
+                }
+
                 updateNotification("${config.agent.label} running on :$port")
                 setStatus(
                     ServiceStatus.Running(
                         agent = config.agent,
                         port = port,
-                        url = "http://${AgentRuntime.LOOPBACK_HOST}:$port",
+                        url = entryUrl,
                         // java.lang.Process.pid() is not in the Android SDK
                         // baseline; use a stable local handle instead.
                         pidHint = "pid-${process.hashCode()}",

@@ -95,15 +95,30 @@ class BootstrapManager(private val appContext: Context) {
             appendLog("=== bootstrap started ===")
             val script = stageScript()
             val runtimeRoot = AgentRuntime.runtimeRoot(appContext)
+            // The working directory MUST exist inside the guest rootfs.
+            // PRoot chdir()s to the current directory inside the guest and
+            // hard-exits (255) when it is missing:
+            //   can't chdir("/data/.../files/./.") in the guest rootfs
+            // process.cwd == filesDir does not exist under runtimeRoot, so the
+            // guest cannot see it. `run-as` inherited a CWD that did exist,
+            // which is why manual testing never reproduced this.
             val process = ProcessBuilder("sh", script.absolutePath)
-                .directory(appContext.filesDir)
+                .directory(runtimeRoot)
                 .apply {
                     // Keep PATH functional on-device; script resolves the rest.
                     environment()["RUNTIME_ROOT"] = runtimeRoot.absolutePath
                     environment()["ROOTFS_TAR"] =
                         File(runtimeRoot, "rootfs.tar.gz").absolutePath
-                    environment()["NODE_DIR"] =
-                        File(runtimeRoot, "node").absolutePath
+                    // Node ships inside the rootfs, so the "node dir" IS the
+                    // runtime root. See AgentRuntime.nodeBinary().
+                    environment()["NODE_DIR"] = runtimeRoot.absolutePath
+                    // Apps targeting API 29+ cannot execute files in their own
+                    // data dir (execute_no_trans). bootstrap.sh probes these
+                    // for a location where the proot binary actually runs.
+                    environment()["EXT_FILES_DIR"] =
+                        (appContext.getExternalFilesDir(null) ?: File(runtimeRoot, "ext")).absolutePath
+                    environment()["CACHE_DIR"] =
+                        (appContext.cacheDir ?: File(runtimeRoot, "cache")).absolutePath
                     environment()["AGENTS_DIR"] =
                         AgentRuntime.agentsDir(appContext).absolutePath
                     environment()["MARKER_FILE"] =

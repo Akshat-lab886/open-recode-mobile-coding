@@ -1,52 +1,34 @@
 {
   "schema": 1,
-  "comment": [
-    "Runtime payload manifest for OPEN RECODE (mobile coding).",
-    "No binaries are committed to this repository by design: Node.js publishes",
-    "no Android/arm64 build, so the runtime cannot be vendored and verified",
-    "without a physical device. Instead the app downloads these on first run",
-    "and verifies each against sha256 before use.",
-    "",
-    "baseUrl: root URL these assets are fetched from. It is intentionally",
-    "EMPTY here because this repository does not host them. Either set it to",
-    "a release/CDN you control, or override it at runtime from the Control",
-    "Center ('Payload source'). Until then the app reports a precise",
-    "'not configured' state instead of failing cryptically.",
-    "",
-    "To host a payload: put each file in a directory laid out as the 'path'",
-    "field below, record its real sha256, and point baseUrl at that directory."
+  "generated": "2026-10-11",
+  "notes": [
+    "Two artifacts ship the runtime. Node is NOT one of them: it is Alpine's",
+    "own nodejs apk packed inside rootfs.tar.gz at /usr/bin/node.",
+    "Do NOT substitute a nodejs.org linux-arm64 tarball. That build is glibc",
+    "and this rootfs is musl; there is no libc.so.6, so it will not load and",
+    "the failure looks like a missing file rather than a wrong libc.",
+    "Build or refresh these with tools/build-alpine-rootfs.py."
   ],
-  "baseUrl": "",
   "assets": [
     {
-      "id": "proot",
-      "path": "proot",
-      "url": "",
-      "sha256": "",
-      "sizeBytes": 0,
-      "required": true,
-      "installMode": "0755",
-      "description": "PRoot ARM64 static binary (rootless Linux syscall translator)"
+      "name": "proot",
+      "arch": "arm64-v8a",
+      "url": "https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64-static",
+      "sha256": "fa10b1a7818c2f5b1dcb5834450570c368c9ecf66d31521509621b95c4538a45",
+      "size": 1479432,
+      "target": "proot",
+      "mode": "0755",
+      "required": true
     },
     {
-      "id": "rootfs",
-      "path": "rootfs.tar.gz",
-      "url": "",
-      "sha256": "",
-      "sizeBytes": 0,
-      "required": true,
-      "installMode": "0644",
-      "description": "Minimal Linux rootfs (e.g. Alpine minirootfs aarch64); extracted by bootstrap.sh"
-    },
-    {
-      "id": "node",
-      "path": "node.tar.xz",
-      "url": "",
-      "sha256": "",
-      "sizeBytes": 0,
-      "required": true,
-      "installMode": "0644",
-      "description": "Node.js runtime built for Android arm64; must unpack to node/bin/node"
+      "name": "rootfs",
+      "arch": "arm64-v8a",
+      "url": "https://github.com/Akshat-lab886/open-recode-mobile-coding/releases/download/v0.2.0/rootfs.tar.gz",
+      "sha256": "65f6bbf468085c65d5311045d88cbc29082750f6295cfb330680a44234c1fb82",
+      "size": 46610202,
+      "target": "rootfs.tar.gz",
+      "mode": "0644",
+      "required": true
     }
   ]
 }

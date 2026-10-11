@@ -13,15 +13,19 @@
  *  2. Parse stdout/stderr into structured events (chat text vs. approval prompt).
  *  3. Serve an HTTP + SSE surface on the loopback port:
  *       GET  /            -> the visual chat UI (HTML)
- *       GET  /health      -> {"ok":true,...} used by EngineWatchdog
+ *       GET  /health      -> {"ok":true,...} HTTP fallback liveness probe
  *       GET  /events      -> SSE stream of {type:...} events
  *       GET  /files?path= -> workspace file listing for the Files tab
  *       POST /send        -> {"text":"..."} writes one line to the child's stdin
  *  4. Never bind to a non-loopback interface.
  *
  * Design notes for the Android side:
- *  - EngineWatchdog polls /health every 5s, so that route MUST answer 2xx
- *    whenever the gateway process is alive.
+ *  - EngineWatchdog probes liveness by opening a TCP connection to the port
+ *    first; only if that fails does it issue this /health request. So /health
+ *    is a fallback, not the primary signal — and unlike DSH (whose web server
+ *    has NO /health route at all and answers 401 at / behind a browser-trust
+ *    fence), the gateway can afford to serve one. Keep it cheap and 2xx while
+ *    alive so a restarted agent is noticed quickly.
  *  - Approval prompts are surfaced to the app as {type:"approval"} events;
  *    the native Bottom Sheet answers by POSTing /send with yes/no.
  */
@@ -313,7 +317,8 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (p === '/health') {
-      // EngineWatchdog polls this every 5s. Must be cheap and 2xx while alive.
+      // HTTP fallback for EngineWatchdog: reached only when its TCP connect
+      // already failed. Must stay cheap and 2xx while this process is alive.
       return json(res, 200, {
         ok: true,
         backend: CFG.backend,

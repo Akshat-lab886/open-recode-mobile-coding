@@ -120,7 +120,23 @@ fun DshMobileShell(
     if (boot is BootstrapManager.BootstrapState.Running ||
         boot is BootstrapManager.BootstrapState.Failed
     ) {
-        BootstrapProgressView(state = boot, onRetry = onRetryBootstrap)
+        BootstrapProgressView(
+            state = boot,
+            onRetry = onRetryBootstrap,
+            onOpenDiagnostics = { showDiagnostics = true },
+        )
+        // The sheet is normally rendered at the end of the normal path, which
+        // this early return skips — render it here too, otherwise the escape
+        // hatch on the failure screen opens nothing.
+        if (showDiagnostics) {
+            DiagnosticsSheet(
+                state = uiState.diagnostics,
+                copiedFlash = uiState.copiedFlash,
+                onCopyAll = onCopyAllLogs,
+                onCopyTrace = onCopyTrace,
+                onDismiss = { showDiagnostics = false },
+            )
+        }
         return
     }
 

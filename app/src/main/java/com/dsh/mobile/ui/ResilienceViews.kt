@@ -18,11 +18,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,6 +55,7 @@ import com.dsh.mobile.watchdog.EngineWatchdog
 fun BootstrapProgressView(
     state: BootstrapManager.BootstrapState,
     onRetry: () -> Unit,
+    onOpenDiagnostics: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -122,6 +125,19 @@ fun BootstrapProgressView(
                         Icon(Icons.Default.Refresh, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("Retry Setup")
+                    }
+                    // Without this, a failed bootstrap is a dead end: the user
+                    // cannot reach logs, API keys, or the workspace picker.
+                    // That matters most for non-technical users, who are
+                    // exactly the ones who hit this screen.
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(
+                        onClick = onOpenDiagnostics,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.Article, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("View setup log & settings")
                     }
                 }
                 else -> {

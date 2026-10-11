@@ -16,7 +16,28 @@ android {
     defaultConfig {
         applicationId = "com.dsh.mobile"
         minSdk = 29
-        targetSdk = 34
+        // MUST stay below 29.
+        //
+        // Android removed the implicit `execute_no_trans` permission for apps
+        // targeting API 29+. Such an app cannot execve() ANY binary inside its
+        // own writable storage. Verified exhaustively on an Android 16 device -
+        // exec is denied in filesDir, getExternalFilesDir() and cacheDir alike:
+        //   ".../dsh-runtime/proot: Permission denied"
+        // while the identical binary runs fine under `run-as`, because that is
+        // a different SELinux domain. This makes the entire PRoot runtime
+        // impossible at targetSdk 34.
+        //
+        // Termux, the canonical Android terminal, uses targetSdk 28 for exactly
+        // this reason. Trade-off: this APK must be sideloaded (it is published
+        // on GitHub Releases, not the Play Store, which mandates 34+).
+        targetSdk = 28
+
+        // Paired with the targetSdk note above: this APK is sideloaded from
+        // GitHub Releases, never the Play Store. Play mandates 34+, which would
+        // re-break execve() of the PRoot binary and make the runtime unusable.
+        lint {
+            disable += "ExpiredTargetSdkVersion"
+        }
         versionCode = 1
         versionName = "1.0.0"
     }
