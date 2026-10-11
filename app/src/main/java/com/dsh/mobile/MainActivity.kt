@@ -5,6 +5,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -13,6 +14,7 @@ import com.dsh.mobile.ui.BootstrapProgressView
 import com.dsh.mobile.ui.CommandDispatcher
 import com.dsh.mobile.ui.ControlCenterViewModel
 import com.dsh.mobile.ui.DshMobileShell
+import com.dsh.mobile.ui.rememberAdaptive
 import com.dsh.mobile.ui.theme.DshMobileTheme
 
 /**
@@ -64,10 +66,13 @@ class MainActivity : ComponentActivity() {
                     // The service gates on the same marker and boots itself
                     // the moment setup completes (no Activity callback needed
                     // — the state flow below flips to the shell on Ready).
-                    BootstrapProgressView(
-                        state = boot,
-                        onRetry = { app.bootstrap.ensureBootstrapped(force = true) },
-                    )
+                    BoxWithConstraints {
+                        BootstrapProgressView(
+                            state = boot,
+                            onRetry = { app.bootstrap.ensureBootstrapped(force = true) },
+                            layout = rememberAdaptive(),
+                        )
+                    }
                 } else {
                     DshMobileShell(
                         uiState = uiState,

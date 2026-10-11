@@ -57,6 +57,14 @@ fun AgentWebView(
     url: String?,
     onWebApproval: (summary: String) -> Unit,
     onGatewayDelta: (text: String) -> Unit = {},
+    /**
+     * Mirrors `AdaptiveLayout.useSidePanel`. Pushed into the page because the
+     * page's own viewport is not the window: on the side-panel path it is
+     * 361dp narrower, so a media query in the page disagrees with the native
+     * layout and either duplicates navigation or removes it outright (a
+     * landscape phone loses Files that way).
+     */
+    nativeSidePanel: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -141,6 +149,12 @@ fun AgentWebView(
 
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
+                    // The shell is injected on every load, so the native
+                    // presentation has to be re-stated every load too.
+                    view?.evaluateJavascript(
+                        "window.__dshSetNativeChrome && window.__dshSetNativeChrome($nativeSidePanel);",
+                        null,
+                    )
                     Log.i(
                         TAG,
                         "page finished: $loadedUrl title=${view?.title} " +
@@ -187,6 +201,18 @@ fun AgentWebView(
 
     LaunchedEffect(url) {
         if (url != null && webView.url != url) webView.loadUrl(url)
+    }
+
+    // Re-push on every load and on every layout change: crossing the breakpoint
+    // swaps the whole presentation, and the page must follow immediately rather
+    // than waiting for its next navigation.
+    LaunchedEffect(nativeSidePanel) {
+        webView.post {
+            webView.evaluateJavascript(
+                "window.__dshSetNativeChrome && window.__dshSetNativeChrome($nativeSidePanel);",
+                null,
+            )
+        }
     }
 
     AndroidView(factory = { webView }, modifier = modifier)

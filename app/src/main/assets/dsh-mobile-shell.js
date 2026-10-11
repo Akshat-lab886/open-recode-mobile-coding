@@ -1,21 +1,38 @@
 /**
  * dsh-mobile-shell.js — injected into the agent WebView on every page load.
  *
- * Transforms the desktop-focused DeepSeek Harness three-column layout
- * (sidebar / chat / file manager) and the OpenClaw dashboard into a
- * touch-driven mobile shell:
+ * Adapts the desktop-focused DeepSeek Harness three-column layout
+ * (sidebar / chat / file manager) and the OpenCode dashboard to the screen it
+ * is actually on:
  *
- *  - Sidebars collapse into swipeable sliding drawers (hamburger toggle).
- *  - The file manager moves into a bottom tab next to Chat.
- *  - The text composer is pinned to the bottom, above the keyboard.
+ *  NARROW (< 840 CSS px — phones, small tablets):
+ *    - Sidebars collapse into a swipeable sliding drawer (hamburger toggle).
+ *    - The file manager moves into a bottom tab next to Chat.
+ *    - The text composer is pinned to the bottom, above the keyboard.
+ *
+ *  WIDE (>= 840 CSS px — large tablets):
+ *    - The page keeps its own multi-column layout. Collapsing a 1400px
+ *      sidebar into a drawer that must be summoned every time is strictly
+ *      worse than showing it, so the transformation is undone.
+ *    - The conversation column is capped and centred, because a transcript
+ *      stretched across a tablet has no usable line length.
+ *    - No injected chrome: no hamburger, no bottom tab bar. The page's own
+ *      navigation is already visible.
+ *
+ * On both sizes:
  *  - Tool-execution prompts ("Do you want to run…?", "Allow file
  *    modification?") are intercepted from the DOM and forwarded to the
  *    native Android Bottom Sheet via the `DshBridge` JS interface instead
  *    of rendering as terminal text.
  *  - Raw <pre>/xterm terminal nodes are hidden — the user never sees a CLI.
  *
- * The WebView enables this file as a post-load script; it is idempotent and
- * re-runs on SPA route changes via MutationObserver.
+ * The 840px threshold is the same breakpoint as the native side panel
+ * (AdaptiveLayout.useSidePanel). If you change one, change both: a tablet
+ * showing a persistent native panel must not also be showing an injected
+ * drawer, or the same navigation appears twice.
+ *
+ * The WebView injects this as a post-load script; it is idempotent and
+ * re-applies on SPA route changes via MutationObserver.
  */
 (function () {
   'use strict';
@@ -27,43 +44,132 @@
   var TABBAR_ID = 'dsh-mobile-tabbar';
   var TOGGLE_ID = 'dsh-mobile-nav-toggle';
 
+  /*
+   * Keep in sync with AdaptiveLayout.useSidePanel.
+   *
+   * That rule is two-axis — `widthClass == Expanded && heightClass != Compact`
+   * — and the height half is load-bearing: a phone in landscape is routinely
+   * wider than 840dp (891x411dp is an everyday viewport), and a width-only
+   * query put such a phone into the tablet presentation. The page then deleted
+   * its own hamburger, drawer and Chat/Files tab bar, leaving a landscape phone
+   * with no way to reach Files at all.
+   *
+   * The half-open case is closed too. On the side-panel path the WebView is
+   * (window - 360dp panel - 1dp rule) wide, so the page only reaches this
+   * breakpoint at window >= 1201dp; between 840dp and 1201dp the native panel
+   * and the page's own hamburger were both on screen at once.
+   */
+  var WIDE_QUERY = '(min-width: 840px) and (min-height: 480px)';
+
+  /*
+   * Native owns the presentation decision; this page only obeys.
+   *
+   * An earlier revision derived "wide" here from the WebView's own media query
+   * and let it decide whether to keep the hamburger and the Chat/Files tab bar.
+   * That is wrong twice over:
+   *
+   *  1. The page's viewport is not the window. On the side-panel path it is
+   *     (window - 360dp panel - 1dp rule), so between 840dp and 1201dp the
+   *     native panel and the page's own hamburger were both on screen.
+   *  2. A media query cannot see a landscape phone at all: 891x411dp is wider
+   *     than 840dp, so the page deleted its own navigation and left the user
+   *     with no route to Files.
+   *
+   * DshMobileShell now calls `__dshSetNativeChrome(useSidePanel)` on every load
+   * and on every layout change. Until it does, `isWide()` falls back to the
+   * two-axis query so the page still degrades sanely if the call is ever lost.
+   */
+  var nativeChromeWide = null;
+
+  function isWide() {
+    if (nativeChromeWide !== null) return nativeChromeWide;
+    // Measured in JS, never with matchMedia.
+    //
+    // This page collapses the document root (html{height:0} behind the shell's
+    // own layout), and a WebView reports media-query heights against that
+    // collapsed box rather than the window. Verified on-device at a 1923x1202dp
+    // window: innerHeight was 1157 and matchMedia('(min-height: 1px)').matches
+    // was FALSE, while matchMedia('(max-height: 1px)') was true. So any
+    // min-height query is permanently unsatisfiable here, and a two-axis
+    // media query silently never matches - the wide presentation could not
+    // activate no matter how large the window became.
+    return window.innerWidth >= 840 && window.innerHeight >= 480;
+  }
+
+  /** Called from native. `wide` mirrors AdaptiveLayout.useSidePanel. */
+  window.__dshSetNativeChrome = function (wide) {
+    nativeChromeWide = !!wide;
+    document.body.classList.toggle('dsh-native-wide', nativeChromeWide);
+    apply();
+  };
+
   /* ------------------------------------------------------------------ */
-  /* 1. Stylesheet: mobile shell transformation                          */
+  /* 1. Stylesheet: responsive shell transformation                      */
   /* ------------------------------------------------------------------ */
   function ensureStyles() {
     if (document.getElementById(SHELL_ID)) return;
     var css = [
-      ':root{--dsh-mobile-bar:#0B0F14;--dsh-mobile-accent:#4DA3FF;}',
+      ':root{--dsh-mobile-bar:#0A0D12;--dsh-mobile-accent:#6FB4FF;',
+      '  --dsh-mobile-edge:rgba(255,255,255,.12);}',
       // Hide raw terminal surfaces entirely.
       '.xterm,.xterm-screen,.terminal-container,pre.terminal-output,[data-terminal-root]{display:none!important;}',
-      // Collapse left/right sidebars into off-canvas drawers.
+
+      /* ---- narrow: drawer + tabs ---- */
       '.dsh-sidebar,.sidebar,[data-panel="sidebar"],aside:first-of-type{',
-      '  position:fixed!important;top:0;bottom:0;left:0;width:min(84vw,340px)!important;',
+      '  position:fixed!important;top:0;bottom:0;left:0;width:min(86vw,340px)!important;',
       '  transform:translateX(-105%);transition:transform .24s ease;z-index:60;',
       '  box-shadow:0 0 32px rgba(0,0,0,.5);overflow-y:auto;}',
       'body.dsh-drawer-open .dsh-sidebar,body.dsh-drawer-open .sidebar,',
       'body.dsh-drawer-open [data-panel="sidebar"]{transform:none!important;}',
-      // Main column becomes full-width; file manager becomes a tab pane.
       '.dsh-main,[data-panel="main"],main{margin-left:0!important;width:100%!important;}',
       '[data-panel="files"],.dsh-file-manager,.file-explorer{display:none!important;}',
       'body.dsh-tab-files [data-panel="files"],body.dsh-tab-files .dsh-file-manager,',
       'body.dsh-tab-files .file-explorer{display:block!important;position:static!important;',
       '  width:100%!important;transform:none!important;}',
       'body.dsh-tab-files [data-panel="chat"],body.dsh-tab-files .dsh-chat{display:none!important;}',
-      // Pin the composer above the keyboard.
-      '.dsh-composer,[data-composer],.chat-input-container{',
-      '  position:sticky!important;bottom:0;z-index:40;padding-bottom:env(safe-area-inset-bottom);}',
-      // Hamburger + bottom tab bar injected by this script.
-      '#' + TOGGLE_ID + '{position:fixed;top:10px;left:10px;z-index:70;width:44px;height:44px;',
-      '  border-radius:12px;border:1px solid rgba(255,255,255,.14);background:var(--dsh-mobile-bar);',
-      '  color:#fff;font-size:20px;}',
       '#' + TABBAR_ID + '{position:fixed;left:0;right:0;bottom:0;z-index:55;display:flex;',
-      '  background:var(--dsh-mobile-bar);border-top:1px solid rgba(255,255,255,.1);',
+      '  background:var(--dsh-mobile-bar);border-top:1px solid var(--dsh-mobile-edge);',
       '  padding-bottom:env(safe-area-inset-bottom);}',
-      '#' + TABBAR_ID + ' button{flex:1;padding:12px 0;background:none;border:none;color:#9AA4B2;font-size:13px;}',
+      '#' + TABBAR_ID + ' button{flex:1;padding:12px 0;background:none;border:none;',
+      '  color:#9AA6B6;font-size:13px;}',
       '#' + TABBAR_ID + ' button.active{color:var(--dsh-mobile-accent);font-weight:600;}',
-      '#' + DRAWER_ID + '-scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:59;display:none;}',
+      '#' + TOGGLE_ID + '{position:fixed;top:12px;left:12px;z-index:70;width:44px;height:44px;',
+      '  border-radius:12px;border:1px solid var(--dsh-mobile-edge);',
+      '  background:rgba(10,13,18,.82);backdrop-filter:blur(8px);',
+      '  color:#fff;font-size:20px;}',
+      '#' + DRAWER_ID + '-scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);',
+      '  z-index:59;display:none;}',
       'body.dsh-drawer-open #' + DRAWER_ID + '-scrim{display:block;}',
+
+      // Composer pinned above the keyboard on every size. The extra bottom
+      // padding fixes a real defect: the field's floating label was clipped
+      // by the pinned container's own edge.
+      '.dsh-composer,[data-composer],.chat-input-container{',
+      '  position:sticky!important;bottom:0;z-index:40;',
+      '  padding-bottom:calc(env(safe-area-inset-bottom) + 8px);}',
+
+      /* ---- wide: undo the collapse, cap the reading column ---- */
+      // Deliberately NOT a @media block. The height half of that query can
+      // never match in this WebView (see isWide), so a media-keyed rule would
+      // look correct in a desktop browser and never fire on the device.
+      /*
+       * Same rules, driven by native instead of by this page's width. The
+       * side-panel path leaves the WebView narrower than 840dp, so the media
+       * query above would keep the page collapsed while native had already
+       * removed the hamburger — navigation with no way to reach it.
+       */
+      'body.dsh-native-wide .dsh-sidebar,body.dsh-native-wide .sidebar,',
+      'body.dsh-native-wide [data-panel="sidebar"],',
+      'body.dsh-native-wide aside:first-of-type{',
+      '  position:static!important;transform:none!important;width:auto!important;',
+      '  box-shadow:none!important;}',
+      'body.dsh-native-wide [data-panel="files"],body.dsh-native-wide .dsh-file-manager,',
+      'body.dsh-native-wide .file-explorer{display:block!important;position:static!important;',
+      '  width:auto!important;}',
+      'body.dsh-native-wide .dsh-main,body.dsh-native-wide [data-panel="main"],',
+      'body.dsh-native-wide main{margin:0 auto!important;max-width:1100px!important;}',
+      'body.dsh-native-wide .dsh-composer,body.dsh-native-wide [data-composer],',
+      'body.dsh-native-wide .chat-input-container{position:static!important;}',
     ].join('\n');
     var style = document.createElement('style');
     style.id = SHELL_ID;
@@ -75,8 +181,23 @@
   /* 2. Chrome: hamburger toggle + Chat/Files tab bar                   */
   /* ------------------------------------------------------------------ */
   function ensureChrome() {
-    if (!document.getElementById(TOGGLE_ID)) {
-      var toggle = document.createElement('button');
+    var toggle = document.getElementById(TOGGLE_ID);
+    var bar = document.getElementById(TABBAR_ID);
+    var scrim = document.getElementById(DRAWER_ID + '-scrim');
+
+    // On a wide screen the page's own navigation is already on screen, so
+    // the injected chrome is removed rather than merely hidden - leaving it
+    // in the DOM would keep duplicate navigation reachable by keyboard.
+    if (isWide()) {
+      [toggle, bar, scrim].forEach(function (el) {
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+      });
+      document.body.classList.remove('dsh-drawer-open', 'dsh-tab-files');
+      return;
+    }
+
+    if (!toggle) {
+      toggle = document.createElement('button');
       toggle.id = TOGGLE_ID;
       toggle.textContent = '☰';
       toggle.setAttribute('aria-label', 'Open navigation');
@@ -85,15 +206,15 @@
       });
       document.body.appendChild(toggle);
 
-      var scrim = document.createElement('div');
+      scrim = document.createElement('div');
       scrim.id = DRAWER_ID + '-scrim';
       scrim.addEventListener('click', function () {
         document.body.classList.remove('dsh-drawer-open');
       });
       document.body.appendChild(scrim);
     }
-    if (!document.getElementById(TABBAR_ID)) {
-      var bar = document.createElement('div');
+    if (!bar) {
+      bar = document.createElement('div');
       bar.id = TABBAR_ID;
       var chatBtn = document.createElement('button');
       chatBtn.textContent = '💬 Chat';
@@ -183,42 +304,35 @@
   };
 
   /* ------------------------------------------------------------------ */
-  /* Boot + SPA re-application                                           */
-  /* ------------------------------------------------------------------ */
-  /* ------------------------------------------------------------------ */
   /* 4. Document height repair                                            */
   /* ------------------------------------------------------------------ */
   /**
    * The agent SPA ships `html,body,#root { height: 100% }`. Inside an
    * Android WebView that percentage chain resolves against a zero-height
-   * initial containing block, so all three collapse to 0px, `body`
-   * scrollHeight becomes 0, and the whole interface paints as a black
-   * rectangle with no error anywhere: the DOM is fully populated (the
-   * onboarding card sits at y=313 with correct geometry) but nothing is
-   * visible.
+   * containing block, so all three collapse to 0px, body.scrollHeight is 0,
+   * and the whole interface paints as a black rectangle with no error
+   * anywhere: the DOM is fully populated and the onboarding card sits at
+   * y=313 with correct geometry, but nothing is visible.
    *
-   * `vh` units resolve against the viewport itself rather than against the
-   * parent, so they survive the broken percentage chain. Measured on an
-   * SM_X115 at 601x898dp: html/body/#root all 0px before, 898px after.
+   * `vh` resolves against the viewport rather than the parent, so it
+   * survives the broken chain. Measured on an SM_X115 at 601x898dp:
+   * html/body/#root all 0px before, 898px after.
    */
   function repairDocumentHeight() {
     var doc = document.documentElement;
+    var body = document.body;
     var root = document.getElementById('root');
-    var needsRepair =
-      doc.clientHeight === 0 ||
-      document.body.offsetHeight === 0 ||
+    if (!doc || !body) return false;
+    var collapsed =
+      doc.clientHeight === 0 || body.offsetHeight === 0 ||
       (root && root.offsetHeight === 0);
-    if (!needsRepair) return false;
-    if (getComputedStyle(doc).getPropertyValue('--dsh-height-repaired') === '1') {
-      return false;
-    }
+    if (!collapsed) return false;
+    if (doc.style.getPropertyValue('--dsh-height-repaired') === '1') return false;
     doc.style.setProperty('--dsh-height-repaired', '1');
     doc.style.setProperty('min-height', '100vh', 'important');
     doc.style.setProperty('height', '100%', 'important');
-    if (document.body) {
-      document.body.style.setProperty('min-height', '100vh', 'important');
-      document.body.style.setProperty('height', 'auto', 'important');
-    }
+    body.style.setProperty('min-height', '100vh', 'important');
+    body.style.setProperty('height', 'auto', 'important');
     if (root) {
       root.style.setProperty('min-height', '100vh', 'important');
       root.style.setProperty('height', 'auto', 'important');
@@ -226,14 +340,28 @@
     return true;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Boot + SPA re-application                                           */
+  /* ------------------------------------------------------------------ */
   function apply() {
     ensureStyles();
+    // One decision, two consumers: the injected chrome and the stylesheet both
+    // read this class, so they cannot disagree.
+    document.body.classList.toggle('dsh-native-wide', isWide());
     ensureChrome();
     repairDocumentHeight();
     scanForApprovalPrompts(document.body);
   }
 
   apply();
+
+  // Rotating or resizing crosses the breakpoint, which swaps the whole
+  // presentation. Without this listener a tablet rotated to portrait keeps
+  // its wide layout and vice versa until the next page load.
+  // Resize, not matchMedia: the media height is pinned at ~0 in this WebView,
+  // so its change event never fires on rotation.
+  window.addEventListener('resize', function () { apply(); });
+
   new MutationObserver(function (mutations) {
     var needsScan = false;
     for (var i = 0; i < mutations.length; i++) {
@@ -247,10 +375,7 @@
   }).observe(document.documentElement, { childList: true, subtree: true });
 
   // The SPA re-renders on route changes, so a later pass can re-collapse the
-  // document. Cheap enough to re-check on a timer, and the guard above means
-  // this is a no-op once the page is healthy.
+  // document. Cheap, and guarded above to be a no-op once healthy.
   setInterval(repairDocumentHeight, 1000);
-
-  // Expose the diagnosis for on-device debugging over the devtools bridge.
   window.__dshRepairHeight = repairDocumentHeight;
 })();
