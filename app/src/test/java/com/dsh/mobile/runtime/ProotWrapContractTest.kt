@@ -3,6 +3,7 @@ package com.dsh.mobile.runtime
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentMode
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -202,10 +203,28 @@ class ProotWrapContractTest {
         // <agents>/lib/node_modules/@deepseek-ai/dsh/lib/bin.js and declares
         // "bin": {"dsh": "lib/bin.js"}. The previously hard-coded
         // "<agents>/dsh/bin/dsh.js" does not exist.
+        // VERIFIED on device: the bundled tarball unpacks to <agents>/dsh/lib/bin.js.
+        // With no such tree present the resolver reports that primary path.
         assertEquals(
-            "/agents/lib/node_modules/@deepseek-ai/dsh/lib/bin.js",
+            "/agents/dsh/lib/bin.js",
             AgentRuntime.dshEntryPoint("/agents"),
         )
+        // The npm --prefix layout is equally real and must still resolve when
+        // it is the one that exists. Build it in a temp dir to prove the probe
+        // rather than asserting a string.
+        val dir = Files.createTempDirectory("agents").toFile()
+        val npmLayout = dir.toPath().resolve("lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+        Files.createDirectories(npmLayout.parent)
+        Files.write(npmLayout, "// entry".toByteArray())
+        assertEquals(
+            npmLayout.toString(),
+            AgentRuntime.dshEntryPoint(dir),
+        )
+        // Bundled layout wins when both exist - it is the one we ship.
+        val bundled = dir.toPath().resolve("dsh/lib/bin.js")
+        Files.createDirectories(bundled.parent)
+        Files.write(bundled, "// entry".toByteArray())
+        assertEquals(bundled.toString(), AgentRuntime.dshEntryPoint(dir))
     }
 
     @Test
@@ -218,13 +237,18 @@ class ProotWrapContractTest {
         )
         assertTrue(
             "argv must invoke the real lib/bin.js through node",
-            argv.any { it.endsWith("@deepseek-ai/dsh/lib/bin.js") },
+            argv.any { it.endsWith("dsh/lib/bin.js") },
         )
+        // ProcessBuilder EXECUTES argv[0], so the interpreter must lead and
+        // --expose-internals must follow it. Reversing these makes Java try to
+        // exec a file named "--expose-internals" and the child dies with ENOENT.
         assertTrue("must invoke node explicitly", argv.first().endsWith("/node"))
+        assertEquals("--expose-internals", argv[1])
     }
 
     @Test
     fun `dsh argv remains the verified profile form`() {
+        val dshEntry = "/root/agents/dsh/lib/bin.js"
         val argv = AgentRuntime.buildArgv(
             agent = ActiveAgent.DEEPSEEK_HARNESS,
             nodePath = "/root/usr/bin/node",
@@ -235,5 +259,11 @@ class ProotWrapContractTest {
         assertEquals("web", argv[argv.indexOf("--profile") + 1])
         assertTrue("--no-open required or the agent opens a browser", argv.contains("--no-open"))
         assertFalse("--workspace is rejected by the real CLI", argv.contains("--workspace"))
+        // --expose-internals is consumed by node itself, never forwarded to dsh,
+        // so it must NOT be in the dsh option set the CLI accepts.
+        assertTrue(
+            "--expose-internals must not be passed through to dsh",
+            argv.indexOf("--expose-internals") < argv.indexOf(dshEntry),
+        )
     }
 }

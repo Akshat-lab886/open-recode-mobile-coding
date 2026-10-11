@@ -48,8 +48,61 @@ object AgentRuntime {
      * is no separate `node/` directory. When the child runs under PRoot the
      * guest sees this as [GUEST_NODE_PATH].
      */
-    fun nodeBinary(context: Context): File =
-        File(runtimeRoot(context).absolutePath + "/usr/bin/node")
+    fun nodeBinary(context: Context): File {
+        val guest = File(runtimeRoot(context).absolutePath + "/usr/bin/node")
+        if (guest.canExecute()) return guest
+        // No PRoot guest. Fall back to the bionic Node bundled in the APK.
+        // It lives in nativeLibraryDir because that is the only app location
+        // where execve is still permitted at targetSdk 29+ (execute_no_trans
+        // blocks filesDir, cacheDir and the external files dir).
+        return nativeNode(context) ?: guest
+    }
+
+    /** The bundled bionic Node, or null when the APK has no payload. */
+    fun nativeNode(context: Context): File? {
+        val f = File(context.applicationInfo.nativeLibraryDir, NATIVE_NODE_NAME)
+        return f.takeIf { it.canExecute() }
+    }
+
+    /**
+     * Shared libraries for the bundled Node.
+     *
+     * These are assets, not jniLibs: aapt2 packages only `lib*.so` from
+     * jniLibs, so versioned SONAMEs like libz.so.1, libssl.so.3 and
+     * libicuuc.so.78 would be dropped without a word and the loader would
+     * fail with "library libz.so.1 not found".
+     */
+    fun nativeLibsDir(context: Context): File =
+        File(File(context.filesDir, "nativelibs-root"), "nativelibs")
+
+    const val NATIVE_NODE_NAME = "libnode.so"
+
+    /**
+     * Absolute paths the bundled bionic runtime needs, as plain strings.
+     *
+     * Deliberately not a [Context]: the environment contract is asserted by
+     * JVM unit tests that have no Android framework available, and passing a
+     * Context here would force them to drop those tests.
+     */
+    data class NativePaths(
+        val libsDir: String,
+        val nativeLibDir: String,
+        val opensslConf: String,
+        val scratchDir: String,
+        val homeDir: String,
+    )
+
+    fun nativePaths(context: Context): NativePaths {
+        val libs = nativeLibsDir(context)
+        val runtime = runtimeRoot(context)
+        return NativePaths(
+            libsDir = libs.absolutePath,
+            nativeLibDir = context.applicationInfo.nativeLibraryDir,
+            opensslConf = File(libs, "openssl.cnf").absolutePath,
+            scratchDir = File(runtime, "tmp").apply { mkdirs() }.absolutePath,
+            homeDir = runtime.absolutePath,
+        )
+    }
 
     /**
      * Agent CLIs (npm global prefix). Guest path [GUEST_AGENTS_DIR].
@@ -191,8 +244,26 @@ object AgentRuntime {
      * We invoke the real file through the guest's node rather than the shim so
      * the shebang never has to resolve `env node` on a musl guest.
      */
-    fun dshEntryPoint(agentsDir: String): String =
-        "$agentsDir/lib/node_modules/@deepseek-ai/dsh/lib/bin.js"
+    fun dshEntryPoint(agentsDir: String): String = dshEntryPoint(File(agentsDir))
+
+    /**
+     * Two layouts are real and both occur:
+     *   bundled payload  -> <agents>/dsh/lib/bin.js
+     *   npm --prefix     -> <agents>/lib/node_modules/@deepseek-ai/dsh/lib/bin.js
+     *
+     * VERIFIED on device: the bundled tarball unpacks to the first, while an
+     * on-device `npm install --prefix` produces the second. Pointing at only
+     * the npm layout leaves the bundled install with a path that does not
+     * exist, which the child reports as a bare module-not-found and the UI
+     * shows as a loading screen that never resolves.
+     */
+    fun dshEntryPoint(agentsDir: File): String {
+        val bundled = File(agentsDir, "dsh/lib/bin.js")
+        if (bundled.isFile) return bundled.absolutePath
+        val npmLayout = File(agentsDir, "lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+        if (npmLayout.isFile) return npmLayout.absolutePath
+        return bundled.absolutePath // report the expected primary path on failure
+    }
 
     /**
      * The agent argv WITHOUT the PRoot wrapper — split out from [buildCommand]
@@ -225,11 +296,20 @@ object AgentRuntime {
         // non-zero ("error: unknown option '--workspace'"). The workspace
         // is already the child's CWD and the PRoot `/workspace` bind.
         ActiveAgent.DEEPSEEK_HARNESS -> listOf(
-            // VERIFIED entry point: npm with `--prefix <agents>` installs the
-            // package at <agents>/lib/node_modules/@deepseek-ai/dsh and its
-            // declared bin is lib/bin.js. The previously assumed
-            // "<agents>/dsh/bin/dsh.js" does not exist and never did.
-            nodePath, dshEntryPoint(agentsDir),
+            // ORDER MATTERS. ProcessBuilder treats argv[0] as the executable to
+            // run, so nodePath MUST be first - putting "--expose-internals"
+            // there makes Java try to exec a file with that name and the child
+            // dies with IOException error=2 (ENOENT) before node ever starts.
+            nodePath,
+            // REQUIRED, verified on device: without it the plugin tree refuses
+            // to load with
+            //   cordis-plugin-hmr: --expose-internals is required for HMR service
+            // and the server never starts. This is a NODE flag, so it goes
+            // after the interpreter and before the script.
+            "--expose-internals",
+            // VERIFIED entry point: the declared bin is lib/bin.js. See
+            // [dshEntryPoint] for why two parent layouts are accepted.
+            dshEntryPoint(agentsDir),
             "--profile", "web",
             "--host", LOOPBACK_HOST,
             "--port", port.toString(),
@@ -278,6 +358,7 @@ object AgentRuntime {
         port: Int,
         insideProot: Boolean,
         prootTmpDir: String = "",
+        native: NativePaths? = null,
     ): Map<String, String> = buildMap {
         putAll(apiEnv)
         put("DSH_WORKSPACE", workspace.absolutePath)
@@ -287,6 +368,28 @@ object AgentRuntime {
         put("TERM", "xterm-256color")
         // Keep child traffic on-device: the UI is served via loopback only.
         put("NO_UPDATE_CHECK", "1")
+        if (!insideProot) {
+            // The bundled bionic Node. All three of these are required and all
+            // three fail silently-or-confusingly without them:
+            //
+            // OPENSSL_CONF  Termux's Node hardcodes its OpenSSL config to
+            //   Termux's own prefix (/data/data/com.termux/...), which does not
+            //   exist here; every run then aborts with
+            //   BIO_new_file:Permission denied. We ship our own openssl.cnf.
+            // LD_LIBRARY_PATH  the versioned shared libraries are assets,
+            //   unpacked to filesDir, not next to the interpreter in
+            //   nativeLibraryDir.
+            // TMPDIR/HOME  os.tmpdir() likewise returns the Termux prefix.
+            // native is null only in unit tests that do not exercise the
+            // bundled-runtime branch; a real call always supplies it.
+            if (native != null) {
+                put("LD_LIBRARY_PATH", "${native.libsDir}:${native.nativeLibDir}")
+                put("OPENSSL_CONF", native.opensslConf)
+                put("TMPDIR", native.scratchDir)
+                put("HOME", native.homeDir)
+            }
+            put("npm_config_registry", "https://registry.npmjs.org")
+        }
         if (insideProot) {
             // Inside PRoot the inherited Android PATH makes guest binaries
             // unfindable, and HOME must exist inside the rootfs for npm/git.

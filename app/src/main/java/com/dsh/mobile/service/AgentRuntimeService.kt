@@ -140,17 +140,21 @@ class AgentRuntimeService : LifecycleService() {
                     }
                 }
             }
+            Log.i(TAG, "boot: bootstrap gate passed")
             setStatus(ServiceStatus.Booting("Preparing runtime…"))
             try {
                 val app = application as DshMobileApp
 
                 // Gateway bundle ships inside the APK but argv points at the
                 // filesystem; copy it out before anything spawns.
+                Log.i(TAG, "boot: staging bundled assets")
                 AgentRuntime.stageBundledAssets(this@AgentRuntimeService)
+                Log.i(TAG, "boot: assets staged")
 
                 // Surface payload gaps up front rather than letting the child
                 // die with an opaque "no such file" deep in the boot.
                 val payload = AgentRuntime.payloadState(this@AgentRuntimeService)
+                Log.i(TAG, "boot: payload state = $payload")
                 if (payload is RuntimePayloadState.NotConfigured) {
                     val names = payload.missing.joinToString(", ") {
                         "${it.id} (${it.description})"
@@ -169,6 +173,7 @@ class AgentRuntimeService : LifecycleService() {
                 }
 
                 val config = app.configStore.snapshot()
+                Log.i(TAG, "boot: agent=${config.agent} proot=${AgentRuntime.isProotActive(this@AgentRuntimeService)}")
                 val workspace = resolveWorkspace(config)
                 val port = AgentRuntime.findFreePort(config.loopbackPort)
                 app.configStore.setPort(port)
@@ -192,12 +197,14 @@ class AgentRuntimeService : LifecycleService() {
                     port = port,
                     insideProot = AgentRuntime.isProotActive(this@AgentRuntimeService),
                     prootTmpDir = AgentRuntime.prootTmpDir(this@AgentRuntimeService),
+                    native = AgentRuntime.nativePaths(this@AgentRuntimeService),
                 )
                 if (apiEnv.isEmpty()) {
                     Log.w(TAG, "no API keys stored — agent will boot unauthenticated")
                 }
 
                 // 3. Spawn the agent bound to loopback.
+                Log.i(TAG, "boot: spawning; node=${AgentRuntime.nodeBinary(this@AgentRuntimeService).absolutePath}")
                 setStatus(ServiceStatus.Booting("Booting ${config.agent.label}…"))
                 val command = AgentRuntime.buildCommand(
                     context = this@AgentRuntimeService,

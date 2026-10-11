@@ -1,6 +1,8 @@
 package com.dsh.mobile.runtime
 
 import com.dsh.mobile.data.ActiveAgent
+import com.dsh.mobile.data.AgentMode
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -120,8 +122,56 @@ private val dshAllowedOptions = setOf(
     @Test
     fun `dsh argv starts with the node runtime and the installed cli`() {
         val argv = dshArgv()
+        // argv[0] must be the INTERPRETER. ProcessBuilder executes argv[0], so
+        // leading with node's own flag makes Java try to exec a file called
+        // "--expose-internals" and the child dies with ENOENT before node runs.
+        // That was a real bug: it left the app on the loading screen forever.
         assertEquals(node, argv[0])
-        assertEquals("$agents/lib/node_modules/@deepseek-ai/dsh/lib/bin.js", argv[1])
+        // dsh refuses to load its plugin tree without it ("cordis-plugin-hmr:
+        // --expose-internals is required for HMR service").
+        assertEquals("--expose-internals", argv[1])
+        assertTrue(
+            "must run the real lib/bin.js, not an npm shim: $argv",
+            argv[2].endsWith("dsh/lib/bin.js"),
+        )
+    }
+
+    @Test
+    fun `native runtime env carries everything the bundled node needs`() {
+        // Regression guard for the bug that left a fresh install on the
+        // loading screen forever. The guest-shaped env was used for the
+        // bundled bionic runtime too, so the child died at startup and the UI
+        // waited for a server that could never come up.
+        val native = AgentRuntime.NativePaths(
+            libsDir = "/data/data/com.dsh.mobile/files/nativelibs-root/nativelibs",
+            nativeLibDir = "/data/app/com.dsh.mobile/lib/arm64",
+            opensslConf = "/data/data/com.dsh.mobile/files/nativelibs-root/nativelibs/openssl.cnf",
+            scratchDir = "/data/data/com.dsh.mobile/files/dsh-runtime/tmp",
+            homeDir = "/data/data/com.dsh.mobile/files/dsh-runtime",
+        )
+        val env = AgentRuntime.buildEnvironment(
+            apiEnv = emptyMap(),
+            workspace = File("/data/data/com.dsh.mobile/files/workspaces/default"),
+            mode = AgentMode.READ_ONLY,
+            port = 3080,
+            insideProot = false,
+            native = native,
+        )
+        // Without this the loader fails: "library libz.so.1 not found".
+        assertTrue(
+            "LD_LIBRARY_PATH must include the unpacked asset libs",
+            env["LD_LIBRARY_PATH"]!!.startsWith(native.libsDir),
+        )
+        // Without this every run aborts with BIO_new_file:Permission denied,
+        // because Termux's Node hardcodes its OpenSSL config to Termux's prefix.
+        assertEquals(native.opensslConf, env["OPENSSL_CONF"])
+        // os.tmpdir() returns the Termux prefix unless TMPDIR is set.
+        assertEquals(native.scratchDir, env["TMPDIR"])
+        assertEquals(native.homeDir, env["HOME"])
+        // Guest-only variables must NOT leak into the native child: PROOT_TMP_DIR
+        // and the guest PATH describe a rootfs this runtime does not have.
+        assertFalse("PROOT_TMP_DIR is guest-only", env.containsKey("PROOT_TMP_DIR"))
+        assertFalse("guest PATH must not shadow the host PATH", env.containsKey("PATH"))
     }
 
     @Test
@@ -130,8 +180,16 @@ private val dshAllowedOptions = setOf(
         // the single most expensive bug in this file — assert the whole
         // whitelist rather than one flag at a time.
         val argv = dshArgv()
-        val unknown = argv.filter { it.startsWith("-") && it !in dshAllowedOptions }
+        // Everything after the entry point is what dsh itself sees; anything
+        // before it is consumed by node.
+        val entryIdx = argv.indexOfFirst { !it.startsWith("-") && it.endsWith("dsh/lib/bin.js") }
+        val dshArgs = argv.drop(entryIdx + 1)
+        val unknown = dshArgs.filter { it.startsWith("-") && it !in dshAllowedOptions }
         assertEquals("options not present in `dsh --profile web --help`: $argv", emptyList<String>(), unknown)
+        assertTrue(
+            "--expose-internals is a node flag and must not reach dsh",
+            argv.indexOf("--expose-internals") < entryIdx,
+        )
     }
 
     @Test
