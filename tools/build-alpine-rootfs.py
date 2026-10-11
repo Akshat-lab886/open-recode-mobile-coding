@@ -62,6 +62,13 @@ SEEDS = [
     "busybox", "alpine-baselayout", "musl",
 ]
 
+# Diagnostic-only additions. `build-base` + `musl-dev` let us compile a syscall
+# probe INSIDE the rootfs on the device, which is how we identify the syscall
+# Android's app seccomp filter kills (see tools/syscall-probe.c). Adds ~200 MB,
+# so this is opt-in and must stay out of the shipping payload.
+if os.environ.get("WITH_TOOLCHAIN") == "1":
+    SEEDS += ["build-base", "musl-dev"]
+
 # Every one of these must exist in the finished rootfs or the build is rejected.
 # Alpine installs shells into /bin (not /usr/bin): bash, busybox and the busybox
 # applet symlinks all live there.
