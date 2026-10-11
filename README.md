@@ -41,18 +41,26 @@ This is an honest snapshot, not a finished product.
   guest toolchain runs perfectly — but **PRoot cannot run inside a normal app
   process**, and that is a platform restriction, not a bug we can fix here:
 
-  ```
-  # same binary, same arguments, two launch contexts
-  run-as (adb shell):    Seccomp: 0  Filters: 0  ->  proot works
-  app process (zygote):  Seccomp: 2  Filters: 1  ->  proot exits 255, no output
-  ```
+  The app captures PRoot's own high-verbosity diagnosis, which names the cause
+outright:
 
-  Zygote-spawned apps inherit an Android seccomp filter that `run-as` does not.
-  That asymmetry is why every component appeared to work under `adb shell` and
-  then failed inside the app. PRoot 5.3.0's `process_vm_readv`/`writev`
-  accelerator has no opt-out (`PROOT_NO_SECCOMP` disables only its own filter),
-  and `v5.5.0` — the current release — ships **no aarch64 prebuilt binary** and
-  no Android fix.
+```
+proot info: vpid 1: translate("/" + "/bin/busybox")
+proot info: vpid 1: terminated with signal 31      <-- SIGSYS = bad system call
+
+# same process tree, same binary, same arguments:
+app process (zygote-spawned):  Seccomp: 2  Filters: 1   ->  SIGSYS
+run-as child:                   Seccomp: 0  Filters: 0   ->  works
+```
+
+Zygote-spawned apps inherit an Android seccomp filter that `run-as` does not,
+and that filter rejects a syscall PRoot requires. That asymmetry is why every
+component appeared to work under `adb shell` and then failed inside the app —
+"it works when I test it manually" was true and useless. PRoot 5.3.0's
+`process_vm_readv`/`process_vm_writev` accelerator has no opt-out
+(`PROOT_NO_SECCOMP` disables only *its own* seccomp filter, and does not help
+here — verified), and `v5.5.0`, the current release, ships **no aarch64
+prebuilt binary** and no Android fix.
 
   The guest runtime itself is real and verified on-device: Node v22.23.2 arm64,
   npm 11.6.4, git 2.49.1, ripgrep 14.1.1, python3 3.12.15, curl 8.14.1, child

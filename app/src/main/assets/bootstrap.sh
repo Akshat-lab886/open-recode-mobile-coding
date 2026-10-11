@@ -313,6 +313,13 @@ NODE_PROBE_ERR="$RUNTIME_ROOT/../dsh-logs/node-probe.err"
 # launches this script with RUNTIME_ROOT as its cwd for that reason.
 NODE_PROBE="$(run_in_rootfs /bin/echo ready 2>&1)" || NODE_PROBE="FAILED"
 if [ "$NODE_PROBE" != "ready" ]; then
+  # Capture proot's own diagnosis at high verbosity. This is the difference
+  # between "we think it is seccomp" and "the tool told us".
+  VERBOSE_OUT="$("$PROOT_BIN" -v 2 -r "$RUNTIME_ROOT" -b /proc -b /dev -b /sys -w / /bin/echo probe 2>&1 || true)"
+  VERBOSE_RC=$?
+  log "proot -v2 rc=$VERBOSE_RC bytes=${#VERBOSE_OUT}"
+  log "proot seccomp filter in this process: $(grep ^Seccomp /proc/self/status 2>/dev/null | tr -s ' ')"
+  printf '%s\n' "$VERBOSE_OUT" | tail -8 | while IFS= read -r l; do log "  | $l"; done
   fail "Android blocked the Linux engine from starting inside the app. This is a device security policy (the app seccomp filter), not a missing download. Try reinstalling, or use a device without a restricted app profile." 3
 fi
 log "linux engine reachable from inside the app"
