@@ -346,6 +346,41 @@ object AgentRuntime {
         )
     }
 
+    /**
+     * On-disk entry point of each agent, or null when it is not installed.
+     *
+     * VERIFIED ON DEVICE: a clean install ships only `dsh` and the gateway.
+     * The app happily selected an agent whose binary was absent, spawned the
+     * gateway pointed at a path that did not exist, and the user saw a blank
+     * page with no error - "the app is installed and nothing works". Every
+     * agent decision must therefore be checked against what is actually on
+     * disk before anything is spawned.
+     */
+    fun agentEntryPoint(agent: ActiveAgent, agentsDir: File): File? = when (agent) {
+        ActiveAgent.DEEPSEEK_HARNESS -> File(dshEntryPoint(agentsDir)).takeIf { it.isFile }
+        ActiveAgent.CLAUDE_CODE -> File(agentsDir, "claude/bin/claude").takeIf { it.isFile }
+        ActiveAgent.CODEX -> File(agentsDir, "codex/bin/codex").takeIf { it.isFile }
+        ActiveAgent.OPENCODE -> File(agentsDir, "opencode/bin/opencode").takeIf { it.isFile }
+    }
+
+    fun isAgentInstalled(agent: ActiveAgent, agentsDir: File): Boolean =
+        agentEntryPoint(agent, agentsDir) != null
+
+    fun installedAgents(agentsDir: File): List<ActiveAgent> =
+        ActiveAgent.entries.filter { isAgentInstalled(it, agentsDir) }
+
+    /**
+     * The agent to actually run.
+     *
+     * Prefers [preferred] when its binary exists, otherwise the first agent
+     * that is genuinely installed. Returning the preferred agent regardless
+     * would reproduce the blank-page bug, so this never returns an agent whose
+     * entry point is missing while another one is present.
+     */
+    fun resolveRunnableAgent(preferred: ActiveAgent, agentsDir: File): ActiveAgent =
+        if (isAgentInstalled(preferred, agentsDir)) preferred
+        else installedAgents(agentsDir).firstOrNull() ?: preferred
+
     /** CLI-only agents render through the in-app visual gateway (no TCP server). */
     fun isGatewayAgent(agent: ActiveAgent): Boolean =
         agent == ActiveAgent.CLAUDE_CODE || agent == ActiveAgent.CODEX

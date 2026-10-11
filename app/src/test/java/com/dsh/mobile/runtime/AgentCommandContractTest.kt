@@ -3,6 +3,7 @@ package com.dsh.mobile.runtime
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentMode
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -212,4 +213,39 @@ private val dshAllowedOptions = setOf(
 
     private fun dshArgvFor(agent: ActiveAgent): List<String> =
         AgentRuntime.buildArgv(agent, node, agents, port)
+
+    @Test
+    fun `an agent whose binary is missing is never spawned`() {
+        // VERIFIED ON DEVICE: only `dsh` and the gateway are bundled, but the
+        // app could be configured for Claude Code. It spawned the gateway
+        // pointed at a nonexistent binary and the user saw a blank page with
+        // no error at all. Resolution must be driven by what is on disk.
+        val dir = Files.createTempDirectory("agents").toFile()
+        val dsh = dir.toPath().resolve("dsh/lib/bin.js")
+        Files.createDirectories(dsh.parent)
+        Files.write(dsh, "// entry".toByteArray())
+
+        assertEquals(
+            listOf(ActiveAgent.DEEPSEEK_HARNESS),
+            AgentRuntime.installedAgents(dir),
+        )
+        assertFalse(AgentRuntime.isAgentInstalled(ActiveAgent.CLAUDE_CODE, dir))
+        // Preferred-but-absent falls back to something real.
+        assertEquals(
+            ActiveAgent.DEEPSEEK_HARNESS,
+            AgentRuntime.resolveRunnableAgent(ActiveAgent.CLAUDE_CODE, dir),
+        )
+        // Preferred-and-present is left alone.
+        assertEquals(
+            ActiveAgent.DEEPSEEK_HARNESS,
+            AgentRuntime.resolveRunnableAgent(ActiveAgent.DEEPSEEK_HARNESS, dir),
+        )
+        // Nothing installed: no silent "run a missing binary".
+        val empty = Files.createTempDirectory("empty-agents").toFile()
+        assertTrue(AgentRuntime.installedAgents(empty).isEmpty())
+        assertEquals(
+            ActiveAgent.CLAUDE_CODE,
+            AgentRuntime.resolveRunnableAgent(ActiveAgent.CLAUDE_CODE, empty),
+        )
+    }
 }

@@ -40,3 +40,7 @@ app/src/main/assets/nativelibs/
 # The dsh agent tree, built on the host by tools/build-dsh-payload.sh and
 # unpacked to filesDir on first boot. ~40 MB, generated, never committed.
 app/src/main/assets/dsh-agent.tar.gz
+
+# Local DSH session transcripts. The agent runtime writes these into the
+# workspace root; they are multi-MB, machine-specific and not source.
+dsh-session-*/

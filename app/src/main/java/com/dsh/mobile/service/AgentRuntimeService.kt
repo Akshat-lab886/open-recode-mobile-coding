@@ -180,7 +180,18 @@ class AgentRuntimeService : LifecycleService() {
                 }
 
                 val config = app.configStore.snapshot()
-                Log.i(TAG, "boot: agent=${config.agent} proot=${AgentRuntime.isProotActive(this@AgentRuntimeService)}")
+                val agentsHome = AgentRuntime.agentsDir(this@AgentRuntimeService)
+                val runnable = AgentRuntime.resolveRunnableAgent(config.agent, agentsHome)
+                if (runnable != config.agent) {
+                    Log.w(
+                        TAG,
+                        "configured agent ${config.agent} is not installed; " +
+                            "falling back to $runnable (installed: " +
+                            "${AgentRuntime.installedAgents(agentsHome)})",
+                    )
+                }
+                val agent = runnable
+                Log.i(TAG, "boot: agent=${config.agent} -> $agent proot=${AgentRuntime.isProotActive(this@AgentRuntimeService)}")
                 val workspace = resolveWorkspace(config)
                 val port = AgentRuntime.findFreePort(config.loopbackPort)
                 app.configStore.setPort(port)
@@ -212,10 +223,10 @@ class AgentRuntimeService : LifecycleService() {
 
                 // 3. Spawn the agent bound to loopback.
                 Log.i(TAG, "boot: spawning; node=${AgentRuntime.nodeBinary(this@AgentRuntimeService).absolutePath}")
-                setStatus(ServiceStatus.Booting("Booting ${config.agent.label}…"))
+                setStatus(ServiceStatus.Booting("Booting ${agent.label}…"))
                 val command = AgentRuntime.buildCommand(
                     context = this@AgentRuntimeService,
-                    agent = config.agent,
+                    agent = agent,
                     workspace = workspace,
                     port = port,
                 )
@@ -225,7 +236,7 @@ class AgentRuntimeService : LifecycleService() {
                 // real tokenized entry URL there, and that token is the only
                 // thing that authenticates — the bare origin answers 401.
                 val launchUrl = AtomicReference<String?>(null)
-                val logFile = AgentRuntime.logFile(this@AgentRuntimeService, config.agent)
+                val logFile = AgentRuntime.logFile(this@AgentRuntimeService, agent)
 
                 val process = withContext(Dispatchers.IO) {
                     ProcessBuilder(command)
@@ -278,7 +289,7 @@ class AgentRuntimeService : LifecycleService() {
                     while (launchUrl.get() == null) delay(100)
                     entryUrl = launchUrl.get() ?: origin
                 }
-                if (entryUrl == origin && !AgentRuntime.isGatewayAgent(config.agent)) {
+                if (entryUrl == origin && !AgentRuntime.isGatewayAgent(agent)) {
                     Log.w(
                         TAG,
                         "no authenticated banner after ${LAUNCH_URL_TIMEOUT_MS}ms; " +
@@ -289,14 +300,14 @@ class AgentRuntimeService : LifecycleService() {
                 // The banner can still arrive after we go Running (slow boot,
                 // slow plugin tree). Keep watching and upgrade the URL in place
                 // rather than leaving the user on a permanently blank 401 page.
-                if (entryUrl == origin && !AgentRuntime.isGatewayAgent(config.agent)) {
-                    watchForLaunchUrl(process, logFile, launchUrl, config, port)
+                if (entryUrl == origin && !AgentRuntime.isGatewayAgent(agent)) {
+                    watchForLaunchUrl(process, logFile, launchUrl, agent, port)
                 }
 
-                updateNotification("${config.agent.label} running on :$port")
+                updateNotification("${agent.label} running on :$port")
                 setStatus(
                     ServiceStatus.Running(
-                        agent = config.agent,
+                        agent = agent,
                         port = port,
                         url = entryUrl,
                         // java.lang.Process.pid() is not in the Android SDK
@@ -347,7 +358,7 @@ class AgentRuntimeService : LifecycleService() {
         process: Process,
         logFile: File,
         launchUrl: AtomicReference<String?>,
-        config: RuntimeConfig,
+        agent: ActiveAgent,
         port: Int,
     ) {
         lifecycleScope.launch(Dispatchers.IO) {
@@ -358,7 +369,7 @@ class AgentRuntimeService : LifecycleService() {
                 Log.i(TAG, "late banner arrived; republishing authenticated URL")
                 setStatus(
                     ServiceStatus.Running(
-                        agent = config.agent,
+                        agent = agent,
                         port = port,
                         url = url,
                         pidHint = "pid-${process.hashCode()}",

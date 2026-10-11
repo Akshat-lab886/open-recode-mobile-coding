@@ -162,9 +162,15 @@ class EngineWatchdog(
          */
         const val LOOPBACK_HOST = "127.0.0.1"
         const val POLL_INTERVAL_MS = 5_000L
-        const val INITIAL_GRACE_MS = 8_000L
+        /**
+         * Measured on-device: `dsh web` needs 30-60s to load its plugin tree
+         * and bind the port. The previous 8s grace plus 3x5s of failures hit
+         * that threshold at ~23s and restarted the agent while it was still
+         * booting - which rebinds a new port and restarts the wait again.
+         */
+        const val INITIAL_GRACE_MS = 75_000L
         const val PROBE_TIMEOUT_MS = 3_000
-        const val FAILURE_THRESHOLD = 3 // ~15s of failures before alerting
+        const val FAILURE_THRESHOLD = 3 // ~15s of failures after the grace period
         const val LOG_TAIL_CHARS = 8_000
     }
 }
