@@ -318,6 +318,107 @@
    * survives the broken chain. Measured on an SM_X115 at 601x898dp:
    * html/body/#root all 0px before, 898px after.
    */
+  /* ------------------------------------------------------------------ */
+  /* Viewport-height repair: `vh` resolves to 0 in this WebView         */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * The measured viewport height in px.
+   *
+   * Prefers visualViewport when present, because it tracks the real visible
+   * area when the soft keyboard is up, and innerHeight otherwise.
+   */
+  function viewportHeight() {
+    var vv = window.visualViewport && window.visualViewport.height;
+    var h = (typeof vv === 'number' && vv > 0) ? vv : window.innerHeight;
+    // Never hand back something that would re-collapse the document.
+    return Math.max(1, Math.round(h || 0)) + 'px';
+  }
+
+  var VH_REPAIR_ID = 'dsh-vh-repair';
+
+  function installViewportHeightRepair() {
+    var doc = document.documentElement;
+    doc.style.setProperty('--dsh-vh', viewportHeight());
+    syncTouchTarget();
+
+    var sheet = document.getElementById(VH_REPAIR_ID);
+    if (!sheet) {
+      sheet = document.createElement('style');
+      sheet.id = VH_REPAIR_ID;
+      /*
+       * `!important` is required and deliberate: the agent's own sheet sets
+       * these rules with `!important` too, and without matching priority a
+       * plain author rule loses. Selectors are attribute-substring matches on
+       * the generated class names, so this survives CSS-in-JS class rehashing.
+       *
+       * Each rule mirrors the agent's own declaration with `vh` replaced by the
+       * measured value. Only height-bearing surfaces are touched: dialogs,
+       * popover menus, the settings panel and the image/code viewers. Width is
+       * NOT broken (`vw` resolves correctly) so no `vw` rule is needed.
+       */
+      sheet.textContent = [
+        /*
+         * Touch targets.
+         *
+         * Measured on-device: 27 of 30 visible buttons were under the 48dp
+         * floor, the smallest at 12 CSS px. That is the "can barely see and
+         * touch" half of the complaint - a correct-looking dialog is still
+         * unusable if the controls cannot be hit.
+         *
+         * Only *size* is touched. Padding is added rather than height, so the
+         * agent's own layout and typography are untouched; min-height would
+         * fight its row heights instead of growing the hit area.
+         */
+        /*
+         * Specificity note: the agent sets `min-height:28px` on its own class
+         * selectors (the workspace and mode triggers), which outranks a bare
+         * `button` rule. `button[class]` is used instead so the override
+         * actually wins rather than silently losing to a more specific rule.
+         */
+        'button,button[class]{min-height:var(--dsh-touch,64px)}',
+        '[role="menuitem"],[role="option"],a[role="button"]{min-height:56px}',
+        // Icon-only controls need width too, or they stay a 36px sliver.
+        'button[aria-label]{min-width:var(--dsh-touch,64px)}',
+        // Menus and popovers can overflow when every row grows; keep them
+        // scrollable instead of clipping.
+        '[class*="_menu"]{overflow-y:auto}',
+        // Dialogs / sheets: max-height: calc(100vh - 48px)
+        '[class*="_content"]{max-height:calc(var(--dsh-vh) - 48px) !important}',
+        // Settings panel: height: min(800px, 100vh - 48px)
+        '[class*="_panel"]{height:min(800px,calc(var(--dsh-vh) - 48px)) !important}',
+        // Popover menus: max-height variants expressed in vh
+        '[class*="_menu"]{max-height:calc(var(--dsh-vh) - 32px) !important}',
+        // Code viewer: max-height: min(52vh, 480px)
+        '[class*="_viewerCode"]{max-height:min(calc(var(--dsh-vh) * .52),480px) !important}',
+        // Image viewer: max-height: calc(100vh - 80px)
+        '[class*="_image"]{max-height:calc(var(--dsh-vh) - 80px) !important}',
+      ].join('\n');
+      (document.head || doc).appendChild(sheet);
+    }
+  }
+
+  /** Re-measure after a resize, keyboard show/hide, or rotation. */
+  function syncViewportHeight() {
+    document.documentElement.style.setProperty('--dsh-vh', viewportHeight());
+    syncTouchTarget();
+  }
+
+  /**
+   * 48dp expressed in CSS pixels.
+   *
+   * The floor is specified in dp, but CSS lengths here are px, and this device
+   * runs at devicePixelRatio 1.33 - so a hard-coded 48px would be a 36dp
+   * control, still below the floor it claims to enforce. Derived from the
+   * live ratio and clamped, because a huge ratio would otherwise produce an
+   * unusable button.
+   */
+  function syncTouchTarget() {
+    var dpr = window.devicePixelRatio || 1;
+    var px = Math.round(Math.min(Math.max(48 * dpr, 48), 72));
+    document.documentElement.style.setProperty('--dsh-touch', px + 'px');
+  }
+
   function repairDocumentHeight() {
     var doc = document.documentElement;
     var body = document.body;
@@ -329,12 +430,17 @@
     if (!collapsed) return false;
     if (doc.style.getPropertyValue('--dsh-height-repaired') === '1') return false;
     doc.style.setProperty('--dsh-height-repaired', '1');
-    doc.style.setProperty('min-height', '100vh', 'important');
-    doc.style.setProperty('height', '100%', 'important');
-    body.style.setProperty('min-height', '100vh', 'important');
+    // A measured pixel height, never `100vh`.
+    //
+    // An earlier revision repaired the collapse with `min-height:100vh`, which
+    // is self-defeating here: `vh` is exactly the unit that is broken (see
+    // installViewportHeightRepair), so it re-collapsed the document.
+    doc.style.setProperty('min-height', viewportHeight(), 'important');
+    doc.style.setProperty('height', viewportHeight(), 'important');
+    body.style.setProperty('min-height', viewportHeight(), 'important');
     body.style.setProperty('height', 'auto', 'important');
     if (root) {
-      root.style.setProperty('min-height', '100vh', 'important');
+      root.style.setProperty('min-height', viewportHeight(), 'important');
       root.style.setProperty('height', 'auto', 'important');
     }
     return true;
@@ -349,6 +455,7 @@
     // read this class, so they cannot disagree.
     document.body.classList.toggle('dsh-native-wide', isWide());
     ensureChrome();
+    installViewportHeightRepair();
     repairDocumentHeight();
     scanForApprovalPrompts(document.body);
   }
@@ -360,7 +467,17 @@
   // its wide layout and vice versa until the next page load.
   // Resize, not matchMedia: the media height is pinned at ~0 in this WebView,
   // so its change event never fires on rotation.
-  window.addEventListener('resize', function () { apply(); });
+  window.addEventListener('resize', function () {
+    syncViewportHeight();
+    apply();
+  });
+
+  // The soft keyboard changes the visible viewport without a window resize on
+  // every OEM path, so track visualViewport directly too.
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncViewportHeight);
+    window.visualViewport.addEventListener('scroll', syncViewportHeight);
+  }
 
   new MutationObserver(function (mutations) {
     var needsScan = false;

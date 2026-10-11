@@ -1,5 +1,6 @@
 package com.dsh.mobile.ui
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -150,4 +151,98 @@ class MobileShellJsContractTest {
     fun `the script is idempotent`() {
         assertTrue(shellJs.contains("__dshMobileShellInstalled"))
     }
+
+    /**
+     * `vh` resolves to 0 in this WebView.
+     *
+     * Measured live over CDP at a 601x898 CSS-px viewport: `100vh`, `50vh`,
+     * `1vh` and `50%` ALL measured 0, while `100px` measured 100 and `100vw`
+     * measured 601. The agent page collapses the document root, so the WebView
+     * resolves viewport-percentage *heights* against a zero-height box.
+     *
+     * The consequence was the user-reported bug: every agent surface sized in
+     * `vh` collapsed. The settings panel computed to 0px tall and the API-key
+     * dialog's `max-height: calc(100vh - 48px)` computed to `max(0, -48) = 0`,
+     * clipping ~150px of form to 56px - a narrow unusable strip.
+     */
+    @Test
+    fun `the viewport height repair exists because vh resolves to zero`() {
+        assertTrue(
+            "the measured-pixel height must be exposed as --dsh-vh",
+            shellJs.contains("--dsh-vh"),
+        )
+        assertTrue(
+            "the height must be measured in JS, since vh cannot be trusted",
+            shellJs.contains("window.visualViewport") ||
+                shellJs.contains("window.innerHeight"),
+        )
+        assertTrue(
+            "the repair sheet must be installed",
+            shellJs.contains("dsh-vh-repair"),
+        )
+    }
+
+    /**
+     * A user who cannot reliably tap a control cannot use the settings at all.
+     * Measured on-device before the fix: 27 of 30 visible buttons were under
+     * the 48dp floor, the smallest at 12 CSS px.
+     */
+    @Test
+    fun `touch targets are raised to the 48dp floor in device pixels`() {
+        assertTrue(
+            "the touch floor must derive from devicePixelRatio, not a hard-coded px",
+            shellJs.contains("devicePixelRatio"),
+        )
+        assertTrue(
+            "48dp must be expressed in CSS px via a variable",
+            shellJs.contains("--dsh-touch"),
+        )
+        // `button[class]` outranks the agent's own min-height on a bare
+        // `button`, which is what actually wins the cascade.
+        assertTrue(
+            "the override must outrank the agent's class-level min-height",
+            Regex("""button,\\?button\\?\[class\\?\]\\?\\?\{min-height:var\\?\(--dsh-touch""")
+                .containsMatchIn(shellJs) ||
+                shellJs.contains("button[class]{min-height:var(--dsh-touch"),
+        )
+    }
+
+    /**
+     * Width is NOT broken - `vw` measured correctly - so the repair must not
+     * touch width. A `vw` override would be cargo-culting the fix.
+     */
+    @Test
+    fun `the repair touches heights only, never widths`() {
+        val block = shellJs.substringAfter("sheet.textContent = [", "].join")
+        assertFalse(
+            "100vw resolves correctly here; overriding it would be a new bug: $block",
+            block.contains("100vw") || block.contains("vw)"),
+        )
+    }
+
+    /**
+     * The pre-existing document-height repair used `min-height: 100vh`, which
+     * is self-defeating when `vh` is the broken unit.
+     */
+    @Test
+    fun `the document height repair no longer repairs with the broken unit`() {
+        val fn = shellJs.substringAfter("function repairDocumentHeight()")
+            .substringBefore("/* ---")
+        // Strip comments: the function's own comment explains why it must not
+        // use 100vh, so the literal string legitimately appears there.
+        val code = fn.lines().joinToString("\n") { it.substringBefore("//") }
+        assertTrue(
+            "repairDocumentHeight must not set 100vh in code: " + code,
+            !code.contains("100vh"),
+        )
+    }
+
+    @Test
+    fun `the viewport height is re-synced on resize and keyboard changes`() {
+        assertTrue(
+            "visualViewport must be tracked so the soft keyboard re-measures",
+            shellJs.contains("visualViewport.addEventListener"),
+        )
+    }
+
 }
