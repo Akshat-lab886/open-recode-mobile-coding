@@ -44,3 +44,4 @@ app/src/main/assets/dsh-agent.tar.gz
 # Local DSH session transcripts. The agent runtime writes these into the
 # workspace root; they are multi-MB, machine-specific and not source.
 dsh-session-*/
+.kotlin/
