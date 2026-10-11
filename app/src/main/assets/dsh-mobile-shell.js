@@ -185,9 +185,51 @@
   /* ------------------------------------------------------------------ */
   /* Boot + SPA re-application                                           */
   /* ------------------------------------------------------------------ */
+  /* ------------------------------------------------------------------ */
+  /* 4. Document height repair                                            */
+  /* ------------------------------------------------------------------ */
+  /**
+   * The agent SPA ships `html,body,#root { height: 100% }`. Inside an
+   * Android WebView that percentage chain resolves against a zero-height
+   * initial containing block, so all three collapse to 0px, `body`
+   * scrollHeight becomes 0, and the whole interface paints as a black
+   * rectangle with no error anywhere: the DOM is fully populated (the
+   * onboarding card sits at y=313 with correct geometry) but nothing is
+   * visible.
+   *
+   * `vh` units resolve against the viewport itself rather than against the
+   * parent, so they survive the broken percentage chain. Measured on an
+   * SM_X115 at 601x898dp: html/body/#root all 0px before, 898px after.
+   */
+  function repairDocumentHeight() {
+    var doc = document.documentElement;
+    var root = document.getElementById('root');
+    var needsRepair =
+      doc.clientHeight === 0 ||
+      document.body.offsetHeight === 0 ||
+      (root && root.offsetHeight === 0);
+    if (!needsRepair) return false;
+    if (getComputedStyle(doc).getPropertyValue('--dsh-height-repaired') === '1') {
+      return false;
+    }
+    doc.style.setProperty('--dsh-height-repaired', '1');
+    doc.style.setProperty('min-height', '100vh', 'important');
+    doc.style.setProperty('height', '100%', 'important');
+    if (document.body) {
+      document.body.style.setProperty('min-height', '100vh', 'important');
+      document.body.style.setProperty('height', 'auto', 'important');
+    }
+    if (root) {
+      root.style.setProperty('min-height', '100vh', 'important');
+      root.style.setProperty('height', 'auto', 'important');
+    }
+    return true;
+  }
+
   function apply() {
     ensureStyles();
     ensureChrome();
+    repairDocumentHeight();
     scanForApprovalPrompts(document.body);
   }
 
@@ -199,7 +241,16 @@
     }
     if (needsScan) {
       ensureChrome();
+      repairDocumentHeight();
       scanForApprovalPrompts(document.body);
     }
   }).observe(document.documentElement, { childList: true, subtree: true });
+
+  // The SPA re-renders on route changes, so a later pass can re-collapse the
+  // document. Cheap enough to re-check on a timer, and the guard above means
+  // this is a no-op once the page is healthy.
+  setInterval(repairDocumentHeight, 1000);
+
+  // Expose the diagnosis for on-device debugging over the devtools bridge.
+  window.__dshRepairHeight = repairDocumentHeight;
 })();

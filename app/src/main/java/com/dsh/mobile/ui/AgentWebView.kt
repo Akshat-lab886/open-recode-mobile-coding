@@ -2,8 +2,13 @@ package com.dsh.mobile.ui
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
+import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
@@ -27,6 +32,14 @@ object WebApprovalRouter {
     @Volatile var answer: ((requestId: String, approved: Boolean) -> Unit)? = null
 }
 
+private const val TAG = "AgentWebView"
+
+/** True once the agent has handed the WebView an auth cookie. */
+private fun hasAuthCookie(): Boolean =
+    CookieManager.getInstance()
+        .getCookie("http://127.0.0.1")
+        ?.contains("dsh-auth-") == true
+
 /**
  * High-performance System WebView container inside Compose.
  *
@@ -48,6 +61,11 @@ fun AgentWebView(
 ) {
     val context = LocalContext.current
     val shellJs = remember { loadShellJs(context) }
+
+    // Lets `adb forward localabstract:webview_devtools_remote_<pid>` expose the
+    // live DOM over CDP. Without it a client-side render failure is
+    // indistinguishable from a blank page.
+    WebView.setWebContentsDebuggingEnabled(true)
 
     val webView = remember {
         WebView(context).apply {
@@ -74,15 +92,73 @@ fun AgentWebView(
             // /send for CLI agents, the live composer for DSH web).
             CommandDispatcher.dispatch = { command -> post { dispatchCommand(command) } }
 
+            // The auth cookie is set by a 303 off `/?token=...` and the WebView
+            // keeps it in memory only. Without this the cookie can be lost
+            // across a process restart, after which `/` answers 401 and the
+            // app renders a silently blank page. Persist it on every write.
+            CookieManager.getInstance().setAcceptCookie(true)
+
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(
                     view: WebView?,
                     request: WebResourceRequest?,
                 ): Boolean = false // keep all navigation inside the shell
 
+                /**
+                 * A 401 here is the blank-screen failure mode: the agent
+                 * replies with a 68-byte text body that renders as nothing,
+                 * and the app looks broken with no explanation.
+                 */
+                override fun onReceivedHttpError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    errorResponse: WebResourceResponse?,
+                ) {
+                    val code = errorResponse?.statusCode ?: -1
+                    if (code >= 400) {
+                        Log.w(
+                            TAG,
+                            "http ${request?.method} ${request?.url} -> $code " +
+                                "authCookiePresent=" + hasAuthCookie(),
+                        )
+                    }
+                    super.onReceivedHttpError(view, request, errorResponse)
+                }
+
+                override fun onReceivedError(
+                    view: WebView?,
+                    request: WebResourceRequest?,
+                    error: WebResourceError?,
+                ) {
+                    Log.w(
+                        TAG,
+                        "load error ${request?.url}: " +
+                            "${error?.errorCode} ${error?.description} " +
+                            "(mainFrame=${request?.isForMainFrame})",
+                    )
+                    super.onReceivedError(view, request, error)
+                }
+
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
+                    Log.i(
+                        TAG,
+                        "page finished: $loadedUrl title=${view?.title} " +
+                            "authCookiePresent=" + hasAuthCookie(),
+                    )
                     view?.evaluateJavascript(shellJs, null)
+                }
+            }
+
+            webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                    // The SPA runs entirely client-side; a boot-time JS error is
+                    // the difference between "renders" and "black screen", and
+                    // it is invisible without this.
+                    if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                        Log.w(TAG, "console: ${msg.message()} @${msg.sourceId()}:${msg.lineNumber()}")
+                    }
+                    return true
                 }
             }
         }
