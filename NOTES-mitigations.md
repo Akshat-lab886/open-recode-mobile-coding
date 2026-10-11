@@ -285,10 +285,56 @@ dsh web: http://127.0.0.1:3087/?token=...
 
 The plugin tree loads, Koffi loads, node-pty spawns real PTYs. It then dies
 within seconds, before the port accepts a connection, with SIGBUS or SIGSEGV
-varying between runs. That variance is the tell: a code fault has one fault
-address and one frame, whereas this is a resource ceiling being hit at
-varying allocation points. Consistent with the device's ~1 GB available RAM
-against the agent's heap plus a 197 MB module tree.
+varying between runs.
+
+### It is NOT a memory shortage
+
+This was my first conclusion and it was wrong. Measured, sampling VmRSS/VmHWM
+throughout startup:
+
+```
+t=0    rss=10 MB    t=7   rss=462 MB   t=11  rss=504 MB
+t=3    rss=100 MB   t=8   rss=551 MB (peak)   t=13 rss=460 MB
+                       system MemAvailable never fell below 650 MB
+```
+
+And with `--trace-gc`:
+
+```
+Scavenge 205.9 (248.2) -> 130.4 (184.7) MB, 17.03 / 0.01 ms
+Incremental Mark-Compact 225.8 (292.2) -> 99.1 (157.7) MB, 41.48 / 0.01 ms
+dsh web: http://127.0.0.1:3091/?token=...
+Scavenge 208.5 (250.9) -> 128.5 (187.5) MB, 9.32 / 0.03 ms
+Segmentation fault
+```
+
+The JS heap oscillates between ~100 and ~225 MB, every collection completes in
+1-17 ms, and there is no "Reached heap limit" - then SIGSEGV. Peak RSS is
+551 MB with 650 MB still free system-wide. So neither V8's heap nor the
+device's RAM is the constraint. `npm`'s crash on this device is likewise not
+OOM: its tombstone is `signal 7 (SIGBUS), code 2 (BUS_ADRERR)` with frame #00
+inside `libc++_shared.so`.
+
+What it actually is remains open. It is native code, it is not GC, and it is
+not allocation pressure.
+
+### How to get a backtrace
+
+`run-as` children produce no tombstone, which is why this stalled. The fix is
+also work we need anyway: have the **app** spawn dsh, so Android's own
+debuggerd captures it as a real app crash with a full native backtrace. Hand-run
+shell commands will not tell us this.
+
+### Rejected hypotheses worth not re-testing
+
+- **Memory / V8 heap.** Disproved above.
+- **libc++ ABI mismatch.** `koffi.node` DT_NEEDED is only `libm`, `libdl`,
+  `libc`; and `pty.node` is built `-static-libstdc++`, so neither loads
+  Termux's `libc++_shared.so`.
+- **Corrupt ICU blob.** `libicudata.so.78` is byte-correct and
+  `new Intl.DateTimeFormat()` works.
+- **Koffi or node-pty in isolation.** Both load and work standalone
+  (`KOFFI-LOADED`, `PTY-HELLO`). The fault appears only in dsh's full startup.
 
 So the runtime problem is solved and the agent boots; what remains is making it
 survive on a memory-constrained device, then wiring it into `AgentRuntime` so
