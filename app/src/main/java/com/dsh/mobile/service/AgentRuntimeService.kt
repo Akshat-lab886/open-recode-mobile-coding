@@ -112,6 +112,13 @@ class AgentRuntimeService : LifecycleService() {
 
     // -- boot sequence ------------------------------------------------------
 
+    /**
+     * How long to wait for `dsh web` to print its authenticated banner.
+     * Measured on-device boot is well over 30s, so this is generous; the
+     * late-banner watcher covers anything longer.
+     */
+    private val LAUNCH_URL_TIMEOUT_MS = 60_000L
+
     private fun boot() {
         // A fresh intent (e.g. credential save, workspace/mode switch) must
         // pre-empt the running boot/watchdog job — never be dropped by it.
@@ -261,12 +268,29 @@ class AgentRuntimeService : LifecycleService() {
                 // back to the plain origin, which is correct for them.
                 val origin = "http://${AgentRuntime.LOOPBACK_HOST}:$port"
                 var entryUrl = origin
-                // Bounded wait: the banner is printed during startup, so this
-                // normally returns almost immediately. On timeout we keep the
-                // plain origin, which is correct for the visual gateway.
-                withTimeoutOrNull(2_500) {
+                // VERIFIED ON DEVICE: `dsh web` takes tens of seconds to boot
+                // before it prints its banner. The previous 2.5s budget almost
+                // always timed out, and the silent fallback to the bare origin
+                // is a page that answers 401 and renders blank - which reads
+                // to the user as "the app is installed and nothing works".
+                // That timeout was the bug, not a cosmetic issue.
+                withTimeoutOrNull(LAUNCH_URL_TIMEOUT_MS) {
                     while (launchUrl.get() == null) delay(100)
                     entryUrl = launchUrl.get() ?: origin
+                }
+                if (entryUrl == origin && !AgentRuntime.isGatewayAgent(config.agent)) {
+                    Log.w(
+                        TAG,
+                        "no authenticated banner after ${LAUNCH_URL_TIMEOUT_MS}ms; " +
+                            "WebView will load the bare origin, which answers 401",
+                    )
+                }
+
+                // The banner can still arrive after we go Running (slow boot,
+                // slow plugin tree). Keep watching and upgrade the URL in place
+                // rather than leaving the user on a permanently blank 401 page.
+                if (entryUrl == origin && !AgentRuntime.isGatewayAgent(config.agent)) {
+                    watchForLaunchUrl(process, logFile, launchUrl, config, port)
                 }
 
                 updateNotification("${config.agent.label} running on :$port")
@@ -308,6 +332,38 @@ class AgentRuntimeService : LifecycleService() {
                     ServiceStatus.Error(e.message ?: "Boot failed", retryable = true),
                 )
                 updateNotification("Boot failed: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Once the agent is Running, keep scanning its stdout for the tokenized
+     * banner and republish the authenticated URL when it shows up.
+     *
+     * Safe to run beside the initial pump: [AgentLaunch.pump] is only reading,
+     * and the streams are closed when the child exits.
+     */
+    private fun watchForLaunchUrl(
+        process: Process,
+        logFile: File,
+        launchUrl: AtomicReference<String?>,
+        config: RuntimeConfig,
+        port: Int,
+    ) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val found = AtomicReference<String?>(null)
+            AgentLaunch.pump(process.inputStream, logFile, found) {}
+            val url = found.get()
+            if (url != null) {
+                Log.i(TAG, "late banner arrived; republishing authenticated URL")
+                setStatus(
+                    ServiceStatus.Running(
+                        agent = config.agent,
+                        port = port,
+                        url = url,
+                        pidHint = "pid-${process.hashCode()}",
+                    ),
+                )
             }
         }
     }

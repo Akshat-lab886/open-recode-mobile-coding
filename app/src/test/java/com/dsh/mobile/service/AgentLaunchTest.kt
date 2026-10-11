@@ -96,4 +96,29 @@ class AgentLaunchTest {
         assertFalse(out, out.contains("token=aaa"))
         assertFalse(out, out.contains("token=bbb"))
     }
+
+    /**
+     * The exact banner `dsh web` printed on-device (captured verbatim from a
+     * real run on R9ZX60AHKEM). If this ever stops matching, the app silently
+     * falls back to the bare origin and the user sees a blank 401 page with no
+     * explanation anywhere - so it is pinned here rather than left to chance.
+     */
+    @Test
+    fun `extracts the real on-device dsh web banner`() {
+        val line = "dsh web: http://127.0.0.1:3100/?token=xL75VcvZdOOAXrgmRHV2TVi0rk5kA-nD4HeUFxYrCDk"
+        assertEquals(
+            "http://127.0.0.1:3100/?token=xL75VcvZdOOAXrgmRHV2TVi0rk5kA-nD4HeUFxYrCDk",
+            AgentLaunch.extractLaunchUrl(line),
+        )
+    }
+
+    @Test
+    fun `the tokenized url is what makes the page load, so it must survive`() {
+        val url = AgentLaunch.extractLaunchUrl(
+            "dsh web: http://127.0.0.1:3080/?token=abc123",
+        )
+        assertTrue("token is required or the page answers 401", url!!.contains("token=abc123"))
+        // The bare origin is what the app falls back to and it renders blank.
+        assertFalse(url.startsWith("http://127.0.0.1:3080/?token=").not())
+    }
 }
