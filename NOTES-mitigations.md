@@ -45,30 +45,64 @@ Everything else the agent needs is allowed: `clone`, `futex`, `mmap`,
   on the syscall traps.
 - **Not SELinux.** No `avc: denied` entries appear in `dmesg` at all.
 
-## The fix
+## What we already tried (and what it cost)
 
-The guest must be built against a libc that never calls the trapped syscalls.
+**Downgrading musl — tested, does NOT work.**
+musl gained `rseq` in 1.2.3, so Alpine 3.15 (musl 1.2.2, verified to contain no
+`rseq` syscall at all) looked like the cheap fix. We built that rootfs
+(102 MB, Node v16.20.2) and re-ran the scan from the app process:
 
-**Option A — older musl (recommended first try).**
-musl gained `rseq` support in 1.2.3. Alpine 3.15 ships musl **1.2.2**, verified
-here to contain no `rseq` syscall at all (212 syscall immediates in `x8`, none
-of them 293). Build the rootfs from `v3.15` instead of `v3.22`.
+```
+rseq(293)           *** TRAPPED ***   (the scanner binary itself calls it)
+io_uring_setup(425) *** TRAPPED ***
+io_uring_enter(426) *** TRAPPED ***
+faccessat2(439)     *** TRAPPED ***
+futex_time64(422)   *** TRAPPED ***
+```
 
-Costs: Node 16.20.2 instead of 22.x. `@deepseek-ai/dsh@0.2.0-rc.2` declares no
-`engines` constraint, so this should still run.
+Identical list. And `/bin/echo` (busybox on musl 1.2.2) still died with signal
+31 in the app process while working under `run-as`. So **musl is not the thing
+calling these** — or at least, not only musl. Node 16 vs Node 22 changed
+nothing, which rules out "too new a Node".
 
-Risk: `faccessat2` and `futex_time64` may still be reached by Node 16's libuv,
-so the scan must be re-run against the new rootfs before committing to it.
+The scanner is sound: run under `run-as` it reports **0 trapped**, and only
+those same 5 light up under the app's filter.
 
-**Option B — patch out the calls.**
-Patch musl's `__rseq_register` and the io_uring/faccessat2 paths, or ship a
-prebuilt musl with those disabled. Needs a cross-toolchain (we can now compile
-on-device via `WITH_TOOLCHAIN=1`, but shipping a patched libc means owning it
-forever).
+## So what does call them?
 
-**Option C — different virtualisation.** A pure-Java ELF loader, or driving a
-companion app (Termux) that already holds a permissive profile. Termux works
-today on this device but is not self-contained.
+Almost certainly **libc's startup path in general, not one libc's quirk** — and
+`io_uring_*` strongly suggests **libuv**, which Node links regardless of
+version. Node 16 and Node 22 share it, which fits the identical result.
+
+## The fix, now that we know the real shape
+
+The blocker is **Node/libuv in the guest**, not proot and not musl.
+
+1. **Build Node without io_uring.** libuv consults an env/feature path that can
+   be forced off; if Node then runs, we have a working engine. **Cheapest thing
+   to try, do this first.**
+2. **A guest that isn't Node-based** — or a pure-Java ELF loader that
+   translates the trapped calls to safe equivalents. Large effort, no external
+   dependency.
+3. **Companion app (Termux).** Verified to work today on this device: Termux
+   holds a permissive profile and already runs Alpine guests. Not
+   self-contained — the user must install it — but it is the only route
+   confirmed to work end to end on real hardware today.
+
+## Re-verify after any change
+
+Never assume. Re-run the scanner from the real app process and require zero
+`TRAPPED` lines **and** a Node that actually starts:
+
+```sh
+# build the scanner inside the candidate rootfs
+<proot> -r <rootfs> /usr/bin/aarch64-alpine-linux-musl-gcc -static -O0 -o /tmp/scan scan.c
+# then, from the app process:
+<proot> -r <rootfs> -b $RUNTIME_ROOT:/probe -w /probe ./scanbin | grep TRAPPED   # must be empty
+```
+
+A clean scan is necessary but not sufficient — the only real proof is the agent
+starting inside the guest from the app process.
 
 ## Verifying a fix
 

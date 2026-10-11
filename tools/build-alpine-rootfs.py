@@ -45,7 +45,7 @@ import urllib.request
 import zlib
 
 REPO = "https://dl-cdn.alpinelinux.org/alpine"
-VER = "v3.22"
+VER = os.environ.get("ALPINE_VER", "v3.22")
 ARCH = "aarch64"
 # Alpine splits the package set across two repositories. npm and ripgrep live in
 # `community`, everything else we seed is in `main`. Indexing only `main` left
