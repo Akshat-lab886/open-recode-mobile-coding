@@ -36,3 +36,7 @@ app/src/main/jniLibs/
 # loader would fail with "library not found". They ship as assets instead and
 # are unpacked to filesDir at runtime.
 app/src/main/assets/nativelibs/
+
+# The dsh agent tree, built on the host by tools/build-dsh-payload.sh and
+# unpacked to filesDir on first boot. ~40 MB, generated, never committed.
+app/src/main/assets/dsh-agent.tar.gz

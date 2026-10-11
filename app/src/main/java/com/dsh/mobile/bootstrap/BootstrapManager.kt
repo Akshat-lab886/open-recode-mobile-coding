@@ -103,6 +103,13 @@ class BootstrapManager(private val appContext: Context) {
             // guest cannot see it. `run-as` inherited a CWD that did exist,
             // which is why manual testing never reproduced this.
             val nativeLibsDir = unpackNativeLibs(File(appContext.filesDir, "nativelibs-root"))
+            val agentTarball = try {
+                stageAgentPayload(File(runtimeRoot, "payload"))
+            } catch (t: Throwable) {
+                appendLog(">>>LOG:agent payload staging failed (${t.javaClass.simpleName}: ${t.message})")
+                appendLog(">>>LOG:continuing without the bundled agent tree")
+                null
+            }
 
             val process = ProcessBuilder("sh", script.absolutePath)
                 .directory(runtimeRoot)
@@ -111,6 +118,7 @@ class BootstrapManager(private val appContext: Context) {
                     environment()["RUNTIME_ROOT"] = runtimeRoot.absolutePath
                     environment()["NATIVE_LIB_DIR"] = appContext.applicationInfo.nativeLibraryDir
                     environment()["NATIVE_LIBS_DIR"] = nativeLibsDir.absolutePath
+                    environment()["AGENT_TARBALL"] = (agentTarball ?: File(runtimeRoot, "none")).absolutePath
                     environment()["ROOTFS_TAR"] =
                         File(runtimeRoot, "rootfs.tar.gz").absolutePath
                     // Node ships inside the rootfs, so the "node dir" IS the
@@ -223,6 +231,47 @@ class BootstrapManager(private val appContext: Context) {
             appendLog(">>>LOG:unpacked $extracted native librar" + if (extracted == 1) "y" else "ies")
         }
         return dir
+    }
+
+    /**
+     * Stages the dsh agent tree for first-boot extraction by bootstrap.sh.
+     *
+     * npm cannot install this tree on the device: resolving ~540 packages
+     * crashes node on a phone-sized RAM budget, so the tree is assembled on the
+     * host (see tools/build-dsh-payload.sh) and shipped as a tarball. It is an
+     * asset rather than a jniLib because it is data, not something we exec.
+     */
+    private fun stageAgentPayload(targetDir: File): File? {
+        targetDir.mkdirs()
+        val tarball = File(targetDir, "dsh-agent.tar.gz")
+        // aapt2 does not preserve asset names verbatim: it decompresses .gz
+        // entries and renames them, so a file shipped as dsh-agent.tar.gz lands
+        // in the APK as assets/dsh-agent.tar. Hard-coding either name breaks
+        // the other way, so resolve by prefix.
+        val assetName = appContext.assets.list("")
+            ?.firstOrNull { it == "dsh-agent.tar.gz" || it.startsWith("dsh-agent.tar") }
+        if (assetName == null) {
+            appendLog(">>>LOG:no agent payload bundled; PRoot guest only")
+            return null
+        }
+        // openFd only works on assets aapt2 stored UNCOMPRESSED, so this size
+        // probe usually fails. That must not be read as "not bundled" - it is
+        // exactly what happened, and the agent was silently skipped.
+        val assetSize = runCatching {
+            appContext.assets.openFd(assetName).use { it.length }
+        }.getOrDefault(-1L)
+        if (assetSize > 0L) {
+            if (tarball.exists() && tarball.length() == assetSize) return tarball
+        } else if (tarball.exists() && tarball.length() > 0L) {
+            // Cannot size-check it; the file being present is good enough.
+            // bootstrap.sh owns idempotency via the unpacked entry point.
+            return tarball
+        }
+        appContext.assets.open(assetName).use { input ->
+            tarball.outputStream().use { output -> input.copyTo(output) }
+        }
+        appendLog(">>>LOG:staged agent payload ${tarball.length() / 1_048_576} MB")
+        return tarball
     }
 
     /** Copies the asset script to app-private storage and makes it executable. */

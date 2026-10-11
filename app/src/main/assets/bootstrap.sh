@@ -41,6 +41,13 @@ ROOTFS_TAR="${ROOTFS_TAR:-$RUNTIME_ROOT/rootfs.tar.gz}"
 export HOME TMPDIR PATH
 NODE_DIR="${NODE_DIR:-$RUNTIME_ROOT}"
 AGENTS_DIR="${AGENTS_DIR:-$RUNTIME_ROOT/agents}"
+# The bundled agent tree, staged by BootstrapManager. Defaulted here like the
+# rest so the script is safe to run by hand and under `set -u`.
+AGENT_TARBALL="${AGENT_TARBALL:-$RUNTIME_ROOT/payload/dsh-agent.tar.gz}"
+
+# Set once we know whether the PRoot guest is usable. The native bionic runtime
+# does not depend on it.
+HAS_ROOTFS="${HAS_ROOTFS:-1}"
 MARKER_FILE="${MARKER_FILE:-$RUNTIME_ROOT/.bootstrap_done}"
 DSH_VERSION="${DSH_VERSION:-latest}"
 
@@ -89,8 +96,15 @@ if [ -f "$RUNTIME_ROOT/etc/os-release" ] || [ -f "$RUNTIME_ROOT/bin/sh" ]; then
   log "rootfs already unpacked, skipping extraction"
 else
   if [ ! -f "$ROOTFS_TAR" ]; then
-    fail "Linux system image not found ($ROOTFS_TAR). Reinstall the app to restore bundled assets." 2
-  fi
+    # Not fatal. The rootfs is the PRoot guest, which is the fallback path. The
+    # primary runtime is the bionic Node inside the APK, which needs no guest
+    # rootfs: it runs directly from nativeLibraryDir. Failing here would strand
+    # a device whose runtime is perfectly working.
+    log "WARNING: no PRoot rootfs at $ROOTFS_TAR - continuing with the native runtime only"
+    HAS_ROOTFS=0
+    log "PRoot guest unavailable; the native bionic runtime will be used instead"
+  else
+  HAS_ROOTFS=1
   log "extracting rootfs (one-time, ~30s)…"
   # NOTE 1: an Android app CANNOT write /tmp - a `2>/tmp/...` redirect fails
   # with EACCES and that failure is what the `if` sees, so extraction would be
@@ -114,6 +128,7 @@ else
     fail "Linux image unpacked but no usable Node runtime. Free at least 1 GB of storage and tap Retry." 2
   fi
   log "rootfs extracted"
+  fi
 fi
 progress 25
 
@@ -184,7 +199,13 @@ for CAND in "$RUNTIME_ROOT" "$EXT_FILES_DIR" "$CACHE_DIR"; do
   fi
 done
 if [ -z "$proot_exec_dir" ]; then
-  fail "Android blocked launching the Linux engine from every writable location on this device. This is a platform policy, not a missing file." 3
+  if [ "$HAS_ROOTFS" = "1" ]; then
+    fail "Android blocked launching the Linux engine from every writable location on this device. This is a platform policy, not a missing file." 3
+  fi
+  # No guest rootfs to run anyway, so a missing exec location costs us nothing.
+  # The native bionic runtime does not use proot at all.
+  log "no usable exec location for proot; native runtime does not need one"
+  proot_exec_dir="none"
 fi
 PROOT_BIN="$proot_exec_dir/.dsh-proot"
 cp -f "$RUNTIME_ROOT/proot" "$PROOT_BIN" 2>/dev/null || true
@@ -293,10 +314,71 @@ progress 62
 #    node-v24-linux-arm64.tar.xz CANNOT run here - musl has no libc.so.6.
 #    We deliberately do NOT fall back to a host node: a host (Android/bionic)
 #    binary cannot execute inside the guest at all.
+step "Unpacking the agent runtime"
+
+# The agent tree is NOT installed with npm here on purpose. npm cannot resolve
+# ~540 packages on a phone-sized RAM budget - it dies before finishing. The tree
+# is assembled on the host and shipped as a tarball asset instead.
+#
+# Two native modules inside it are built specifically for this ABI:
+#   @koromix/koffi-android-arm64  FFI for the subprocess/sandbox loaders.
+#     npm never installs it by default because it only pulls the *host*
+#     platform's optional dependency.
+#   node-pty prebuilds/android-arm64/pty.node  compiled with NDK 28.
+#     node-pty publishes no Android prebuild. forkpty/openpty live in <pty.h> on
+#     bionic (not <util.h>) and are __INTRODUCED_IN(23), so it must target
+#     android24 or the symbols are hidden.
+AGENT_ENTRY="$AGENTS_DIR/dsh/lib/bin.js"
+if [ -f "$AGENT_ENTRY" ]; then
+  log "agent runtime already unpacked"
+elif [ ! -f "$AGENT_TARBALL" ]; then
+  log "no agent payload bundled in this build - the PRoot guest is the only runtime"
+else
+  # Unpacking costs ~200 MB. Refuse rather than fill the device and fail later
+  # in a way that looks like a different bug.
+  AVAIL_MB="$(df -Pk "$(dirname "$AGENTS_DIR")" 2>/dev/null | awk 'NR==2 {print int($4/1024)}')"
+  if [ -n "$AVAIL_MB" ] && [ "$AVAIL_MB" -lt 400 ]; then
+    fail "Need ~400 MB free to unpack the agent runtime, have ${AVAIL_MB} MB. Free some space and reopen the app." 4
+  fi
+  log "unpacking agent runtime (~200 MB) from $(basename "$AGENT_TARBALL")"
+  # aapt2 does not preserve .gz assets verbatim: it DEcompresses them and
+  # renames the entry, so what we read back out of the APK is a plain pax tar,
+  # not a gzip stream. Forcing -z then dies with "zcat: not gzip". Do not trust
+  # the filename - detect, and keep a fallback so either layout works.
+  if tar xzf "$AGENT_TARBALL" -C "$AGENTS_DIR" 2>/dev/null || \
+     tar xf  "$AGENT_TARBALL" -C "$AGENTS_DIR" 2>/dev/null; then
+    log "agent runtime unpacked: $(du -sk "$AGENTS_DIR/dsh" 2>/dev/null | awk '{print int($1/1024)}') MB"
+  else
+    rm -rf "$AGENTS_DIR/dsh"
+    fail "Agent runtime failed to unpack. Free ~400 MB and reopen the app to retry." 4
+  fi
+fi
+
 step "Checking Node.js runtime"
 NODE_BIN="$NODE_DIR/usr/bin/node"
-if [ ! -x "$NODE_BIN" ]; then
-  fail "Node.js not found at $NODE_BIN. The rootfs did not unpack correctly - reinstall the app to restore bundled assets." 3
+if [ "$HAS_ROOTFS" != "1" ] || [ ! -x "$NODE_BIN" ]; then
+  # The native bionic Node is the primary runtime. It lives in nativeLibraryDir
+  # because that is the only app location where execve still works at
+  # targetSdk 29+, and its shared libraries live in $NATIVE_LIBS_DIR because
+  # aapt2 silently drops versioned SONAMEs like libz.so.1 from jniLibs.
+  NATIVE_NODE="$NATIVE_LIB_DIR/libnode.so"
+  if [ ! -x "$NATIVE_NODE" ]; then
+    fail "No Node runtime available: neither the PRoot guest nor $NATIVE_NODE. Reinstall the app." 3
+  fi
+  # OPENSSL_CONF and TMPDIR are not optional here. Termux's Node hardcodes its
+  # OpenSSL config to Termux's own prefix, which does not exist in our sandbox
+  # and aborts every run with BIO_new_file:Permission denied; os.tmpdir() has
+  # the same problem.
+  export OPENSSL_CONF="$NATIVE_LIBS_DIR/openssl.cnf"
+  export LD_LIBRARY_PATH="$NATIVE_LIBS_DIR:$NATIVE_LIB_DIR"
+  export TMPDIR="${TMPDIR:-$RUNTIME_ROOT/tmp}"
+  export HOME="${HOME:-$RUNTIME_ROOT}"
+  mkdir -p "$TMPDIR" 2>/dev/null || true
+  NODE_BIN="$NATIVE_NODE"
+  if ! NODE_VERSION="$("$NODE_BIN" --version 2>&1)"; then
+    fail "The bundled Node failed to start: $NODE_VERSION" 3
+  fi
+  log "native Node $NODE_VERSION ready ($NODE_BIN)"
 fi
 # Guest binaries MUST be launched through proot. Executing them directly from
 # the host shell cannot work at all: the guest is Alpine/musl while the host is
@@ -320,15 +402,38 @@ if [ "$NODE_PROBE" != "ready" ]; then
   log "proot -v2 rc=$VERBOSE_RC bytes=${#VERBOSE_OUT}"
   log "proot seccomp filter in this process: $(grep ^Seccomp /proc/self/status 2>/dev/null | tr -s ' ')"
   printf '%s\n' "$VERBOSE_OUT" | tail -8 | while IFS= read -r l; do log "  | $l"; done
-  fail "Android blocked the Linux engine from starting inside the app. This is a device security policy (the app seccomp filter), not a missing download. Try reinstalling, or use a device without a restricted app profile." 3
+  if [ "$HAS_ROOTFS" = "1" ]; then
+    fail "Android blocked the Linux engine from starting inside the app. This is a device security policy (the app seccomp filter), not a missing download. Try reinstalling, or use a device without a restricted app profile." 3
+  fi
+  # The probe above is the PRoot GUEST, not the runtime we actually use. With no
+  # guest rootfs this failure is expected and irrelevant - the native bionic Node
+  # is already verified above. Failing here would discard a working install.
+  log "proot guest unavailable as expected; the native runtime is already verified"
 fi
 log "linux engine reachable from inside the app"
-NODE_VER="$(run_in_rootfs /usr/bin/env PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/root/bin HOME=/root /usr/bin/node --version 2>/dev/null || echo unknown)"
-log "rootfs node: $NODE_VER"
-case "$NODE_VER" in
-  v2[0-9]*|unknown) : ;;
-  *) fail "Node runtime in the Linux image is unusable (got '$NODE_VER'). Reinstall the app." 3 ;;
-esac
+# Verify whichever runtime was actually selected, not hardcoded guest paths.
+# With the native path $NODE_BIN is nativeLibraryDir/libnode.so and $NODE_BIN
+# has already been executed successfully above.
+if [ "$HAS_ROOTFS" = "1" ] && [ -x "$RUNTIME_ROOT/usr/bin/node" ]; then
+  NODE_VER="$(run_in_rootfs /usr/bin/env PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/root/bin HOME=/root /usr/bin/node --version 2>/dev/null || echo unknown)"
+  log "rootfs node: $NODE_VER"
+  case "$NODE_VER" in
+    v2[0-9]*|unknown) : ;;
+    *) fail "Node runtime in the Linux image is unusable (got '$NODE_VER'). Reinstall the app." 3 ;;
+  esac
+else
+  NODE_VER="$("$NODE_BIN" --version 2>/dev/null || echo unknown)"
+  log "native node: $NODE_VER ($NODE_BIN)"
+  case "$NODE_VER" in
+    v2[0-9]*) : ;;
+    *) fail "The bundled Node runtime is unusable (got '$NODE_VER'). Reinstall the app." 3 ;;
+  esac
+fi
+# Everything below installs agents with the GUEST npm. That is pointless when
+# there is no guest: the agent tree is already bundled in the APK and unpacked
+# above, and npm cannot resolve ~540 packages on a phone-sized RAM budget
+# anyway. Skipping it is not a shortcut - it is the only path that works here.
+if [ "$HAS_ROOTFS" = "1" ]; then
 NPM_BIN="$NODE_DIR/usr/bin/npm"
 if [ ! -x "$NPM_BIN" ]; then
   # npm is a separate Alpine package (community repo) and may be a symlink.
@@ -378,6 +483,10 @@ log "opencode install exit: ${PIPESTATUS:-?}"
 touch "$AGENTS_DIR/.plugins-probed" 2>/dev/null || true
 set -e
 progress 96
+else
+  log "agent tree supplied by the bundled payload; guest npm install not needed"
+  progress 96
+fi
 
 # ---------------------------------------------------------------------------
 # 8. Verify + stamp success.
@@ -386,17 +495,16 @@ step "Verifying installation"
 # VERIFIED npm layout for `--prefix <agents>`:
 #   <agents>/bin/dsh                                           (shim)
 #   <agents>/lib/node_modules/@deepseek-ai/dsh/lib/bin.js       (real entry)
-if [ -x "$AGENTS_DIR/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" ] || \
+# Two legitimate layouts:
+#   bundled payload -> $AGENTS_DIR/dsh/lib/bin.js
+#   guest npm --prefix -> $AGENTS_DIR/lib/node_modules/@deepseek-ai/dsh/lib/bin.js
+if [ -f "$AGENTS_DIR/dsh/lib/bin.js" ] || \
+   [ -x "$AGENTS_DIR/lib/node_modules/@deepseek-ai/dsh/lib/bin.js" ] || \
    [ -x "$AGENTS_DIR/bin/dsh" ] || \
    [ -x "$AGENTS_DIR/lib/node_modules/.bin/dsh" ]; then
   log "dsh entrypoint verified"
 else
-  # npm may have placed the bin under lib/node_modules/.bin — accept that too.
-  if [ -x "$AGENTS_DIR/lib/node_modules/.bin/dsh" ]; then
-    log "dsh verified via .bin symlink"
-  else
-    fail "Install finished but the dsh binary is missing. Tap Retry to reinstall." 4
-  fi
+  fail "Install finished but the dsh binary is missing. Tap Retry to reinstall." 4
 fi
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$MARKER_FILE"
