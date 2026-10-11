@@ -355,3 +355,66 @@ table ends exactly at EOF (33108192 + 10*64 = 33108832 = file size), and
 and after. It was a transient read of a file being rewritten by the asset
 unpacker. Verify against a live run before chasing a corruption that is not
 there.
+
+---
+
+# CORRECTION: it IS memory pressure, just not the V8 heap
+
+I previously concluded "it is not a memory shortage". That was too strong, and
+the evidence that settles it is a controlled experiment rather than a reading.
+
+Same build, same device, only the free memory changed:
+
+| MemAvailable at launch | Result |
+|---|---|
+| ~650 MB | SIGSEGV / SIGBUS within seconds |
+| ~1,170 MB | serves stably: 303 -> `/` -> 401, alive 3+ minutes |
+
+Background apps were force-stopped to open the headroom, nothing else changed.
+So the crash is triggered by memory pressure. I was wrong to rule it out.
+
+## Why the GC trace looked perfectly healthy
+
+This is the part that confused me, and it is the actual insight:
+
+```
+Scavenge 205.9 (248.2) -> 130.4 (184.7) MB, 17.03 / 0.01 ms
+dsh web: http://127.0.0.1:3091/?token=...
+Scavenge 208.5 (250.9) -> 128.5 (187.5) MB, 9.32 / 0.03 ms
+Segmentation fault
+```
+
+V8's heap is nowhere near its limit and every collection finishes. **Because
+the allocation that fails is not a V8 allocation.** It is native - a malloc or
+mmap inside one of the loaded native modules (Koffi's FFI, node-pty, OpenSSL),
+or a thread stack. Those never appear in `--trace-gc`, and a failed mmap on
+Android surfaces as SIGBUS with no JavaScript error and no JS heap message.
+
+That reconciles everything that looked contradictory:
+- V8 heap healthy and small (100-225 MB)
+- yet RSS peaks at 551 MB
+- yet the process dies under pressure
+
+## The peak is a startup spike, not steady state
+
+Worth knowing when tuning this: RSS peaks at **551 MB during startup and then
+falls to ~60 MB** once the plugin tree has loaded and V8 has collected. So the
+budget problem is the transient, not the running server. Constraining the
+startup heap (`--max-old-space-size`) and reducing concurrently-loaded modules
+should remove it without slowing the steady state.
+
+## On "can we just use the vacant swap?"
+
+No, and it is worth being precise about why, because the numbers look
+inviting: `SwapTotal` 8.0 GB with `SwapFree` 6.3 GB.
+
+- That is **zram**, which is *compressed physical RAM*, not separate storage.
+  Pages in zram still consume physical memory, in compressed form. It buys
+  capacity by compressing, not by adding capacity.
+- Swap is kernel-managed. There is no app-level API to route a page to it.
+  `madvise` and `mlock` do not do this, and creating a swapfile needs root.
+- The kernel already does this automatically under pressure - that is what
+  zram is for - and it still was not enough at ~650 MB.
+
+So the headroom cannot simply be claimed. The real lever is lowering the
+551 MB startup spike so the agent fits in a tight budget at all.
