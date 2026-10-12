@@ -182,18 +182,53 @@ class AgentInstaller(private val context: Context) {
         }
         // npm needs a writable HOME and cache inside the app sandbox; outside it
         // the install fails on permissions rather than on the network.
+        val log = StringBuilder()
+
+        // npm does NOT ship in the APK.
+        //
+        // Running it with the bundled bionic libnode.so produced:
+        //   Error: Cannot find module '.../lib/arm64/node_modules/npm/bin/npm-cli.js'
+        // because there is no npm next to the interpreter - npm, git, rg, bash
+        // and python all live inside the Alpine rootfs that PRoot unpacks. The
+        // guest npm is what the bootstrap script already uses (see
+        // `run_in_rootfs /usr/bin/env ... /usr/bin/npm install -g`), and it is
+        // the only npm that actually exists on this device.
+        val runtimeRoot = AgentRuntime.runtimeRoot(context)
+        val proot = File(runtimeRoot, "proot")
         val npmHome = File(context.filesDir, "npm-home").apply { mkdirs() }
         val npmCache = File(context.filesDir, "npm-cache").apply { mkdirs() }
+        val prootTmp = File(runtimeRoot, "tmp").apply { mkdirs() }
 
-        val log = StringBuilder()
+        // Prefer the guest npm under PRoot; fall back to the bundled interpreter
+        // only when PRoot is unavailable, so the reason stays visible in the log.
+        val useProot = proot.canExecute()
+        if (!useProot) {
+            android.util.Log.w(
+                "AgentInstaller",
+                "proot not executable at ${proot.absolutePath}; npm install cannot run",
+            )
+        }
+
+        val command = if (useProot) {
+            listOf(
+                proot.absolutePath,
+                "-r", runtimeRoot.absolutePath,
+                "-b", "/proc", "-b", "/dev", "-b", "/sys",
+                "-w", "/",
+                "/usr/bin/env",
+                "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/root/bin",
+                "HOME=/root",
+                "TMPDIR=/tmp",
+                "npm_config_cache=$npmCache",
+                "NPM_CONFIG_PREFIX=$dir",
+                "/usr/bin/npm", "install", "-g", pkg,
+            )
+        } else {
+            listOf(node.absolutePath, npmCliPath(node).absolutePath, "install", "-g", pkg)
+        }
+
         val proc = try {
-            ProcessBuilder(
-                listOf(
-                    node.absolutePath,
-                    npmCliPath(node).absolutePath,
-                    "install", "-g", pkg,
-                ),
-            ).apply {
+            ProcessBuilder(command).apply {
                 directory(dir)
                 redirectErrorStream(true)
                 environment()["NPM_CONFIG_PREFIX"] = dir.absolutePath
@@ -203,19 +238,17 @@ class AgentInstaller(private val context: Context) {
                 // REQUIRED, not optional. The bundled libnode.so links against
                 // libz.so.1 and friends, which are shipped as assets unpacked to
                 // filesDir rather than sitting beside the interpreter in
-                // nativeLibraryDir. Without this the installer never runs at all:
-                //
+                // nativeLibraryDir. Without this the process is killed by the
+                // linker before npm ever starts:
                 //   CANNOT LINK EXECUTABLE "libnode.so": library "libz.so.1" not found
-                //
-                // and every optional agent silently "failed to install" while npm
-                // had in fact never started. These are the same variables the
-                // agent launch path sets - see AgentRuntime.buildEnvironment -
-                // so the two must stay in step or the app breaks in exactly this
-                // way again.
                 val native = AgentRuntime.nativePaths(context)
                 environment()["LD_LIBRARY_PATH"] = "${native.libsDir}:${native.nativeLibDir}"
                 environment()["OPENSSL_CONF"] = native.opensslConf
                 environment()["TMPDIR"] = native.scratchDir
+                environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
+                // Alpine is musl; without this PRoot aborts with
+                // "can't create temporary file: Permission denied".
+                environment()["PROOT_NO_SECCOMP"] = "1"
                 environment()["npm_config_registry"] = "https://registry.npmjs.org"
             }.start()
         } catch (e: Exception) {
