@@ -282,7 +282,3 @@ npm itself works and the download was in flight, but do not read that as proof.
 It is also expected to be slow under PRoot's `ptrace` overhead, which is an
 argument for pre-installing the agent CLIs into `rootfs.tar.gz` at build time
 rather than installing on the phone.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
