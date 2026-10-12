@@ -1,5 +1,8 @@
 package com.dsh.mobile.runtime
 
+import android.os.Build
+import java.net.URL
+import java.util.zip.GZIPInputStream
 import android.content.Context
 import com.dsh.mobile.data.AgentSpec
 import kotlinx.coroutines.Dispatchers
@@ -45,6 +48,120 @@ class AgentInstaller(private val context: Context) {
      * will use, so the installed tree matches what later boots expect.
      */
     suspend fun install(spec: AgentSpec): Result = withContext(Dispatchers.IO) {
+        when (val kind = spec.install) {
+            is com.dsh.mobile.data.InstallKind.Tarball -> installTarball(spec, kind)
+            is com.dsh.mobile.data.InstallKind.NPM -> installViaNpm(spec, kind.packageName)
+        }
+    }
+
+    /**
+     * Download a release tarball and unpack the executable.
+     *
+     * Used for Antigravity CLI, which is a Go static binary rather than an npm
+     * package. The npm name for it is an unrelated placeholder, so this path is
+     * the only way to get the real tool.
+     */
+    private suspend fun installTarball(
+        spec: AgentSpec,
+        kind: com.dsh.mobile.data.InstallKind.Tarball,
+    ): Result = withContext(Dispatchers.IO) {
+        val dir = agentsDir()
+        dir.mkdirs()
+        val url = kind.urlTemplate.replace("{{arch}}", deviceArch())
+        val log = StringBuilder("GET $url\n")
+        return@withContext try {
+            val tmp = File(context.cacheDir, "${spec.id}.tar.gz")
+            URL(url).openStream().use { input ->
+                tmp.outputStream().use { output -> input.copyTo(output, 1 shl 16) }
+            }
+            log.append("downloaded ${tmp.length()} bytes\n")
+
+            // Unpack only the executable we need: the archive also ships docs
+            // and checksums, and there is no room in the APK sandbox for waste.
+            //
+            // TAR is parsed by hand rather than via commons-compress, which
+            // would be a new dependency. The format is a 512-byte header block
+            // per entry (name in 0..100, size as octal at 124..136, type flag at
+            // 156) followed by the payload padded to 512.
+            val target = File(dir, spec.relativeBinary)
+            target.parentFile?.mkdirs()
+            var found = false
+            GZIPInputStream(tmp.inputStream().buffered()).use { gz ->
+                val header = ByteArray(512)
+                while (true) {
+                    if (!readFully(gz, header)) break
+                    if (header.all { it == 0.toByte() }) continue  // end-of-archive padding
+                    val name = String(header, 0, 100, Charsets.UTF_8).trimEnd('\u0000', ' ')
+                    val sizeField = String(header, 124, 12, Charsets.UTF_8)
+                        .trimEnd('\u0000', ' ')
+                    val size = sizeField.toLongOrNull(8) ?: 0L
+                    val typeFlag = header[156].toInt().toChar()
+                    val isFile = typeFlag == '0' || typeFlag == '\u0000'
+
+                    if (isFile && File(name).name == kind.binaryInArchive) {
+                        val payload = ByteArray(size.toInt())
+                        readFully(gz, payload)
+                        target.outputStream().use { it.write(payload) }
+                        found = true
+                    } else {
+                        skipFully(gz, size)
+                    }
+                    // Payload is padded to the next 512-byte boundary.
+                    val pad = (512 - (size % 512)) % 512
+                    if (pad > 0) skipFully(gz, pad)
+                }
+            }
+            tmp.delete()
+            if (!found || !target.isFile || target.length() == 0L) {
+                Result(spec, installed = false, output = log.toString(),
+                    failure = "Archive did not contain '${kind.binaryInArchive}'")
+            } else {
+                target.setExecutable(true, false)
+                log.append("unpacked to ${target.absolutePath}\n")
+                Result(spec, installed = true, output = log.toString())
+            }
+        } catch (e: Exception) {
+            Result(spec, installed = false, output = log.toString(),
+                failure = "Download failed: ${e.message}")
+        }
+    }
+
+    /** Fill [buf] completely, or return false if the stream ends first. */
+    private fun readFully(input: java.io.InputStream, buf: ByteArray): Boolean {
+        var total = 0
+        while (total < buf.size) {
+            val n = input.read(buf, total, buf.size - total)
+            if (n < 0) return false
+            if (n == 0) continue
+            total += n
+        }
+        return true
+    }
+
+    /** Skip [count] bytes, tolerating a short read. */
+    private fun skipFully(input: java.io.InputStream, count: Long) {
+        var left = count
+        while (left > 0) {
+            val skipped = input.skip(left)
+            if (skipped <= 0) {
+                // skip() may legitimately return 0; fall back to reading.
+                if (input.read() < 0) return
+                left--
+            } else {
+                left -= skipped
+            }
+        }
+    }
+
+    /** `arm64` for the release-asset naming Antigravity uses. */
+    private fun deviceArch(): String = when (Build.SUPPORTED_ABIS.firstOrNull()) {
+        "arm64-v8a", "armeabi-v8a" -> "arm64"
+        "x86_64" -> "x64"
+        else -> Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"
+    }
+
+    private suspend fun installViaNpm(spec: AgentSpec, pkg: String): Result =
+        withContext(Dispatchers.IO) {
         val dir = agentsDir()
         dir.mkdirs()
         val node = AgentRuntime.nodeBinary(context)
@@ -66,7 +183,7 @@ class AgentInstaller(private val context: Context) {
                 listOf(
                     node.absolutePath,
                     npmCliPath(node).absolutePath,
-                    "install", "-g", spec.npmPackage,
+                    "install", "-g", pkg,
                 ),
             ).apply {
                 directory(dir)

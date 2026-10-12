@@ -1,5 +1,9 @@
 package com.dsh.mobile.ui
 
+import android.content.Context
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.flatMapLatest
+import com.dsh.mobile.runtime.AgentRuntime
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -11,6 +15,7 @@ import com.dsh.mobile.data.RuntimeConfigStore
 import com.dsh.mobile.diagnostics.DiagnosticsStore
 import com.dsh.mobile.proxy.VisualGateway
 import com.dsh.mobile.security.ApiKeyVault
+import com.dsh.mobile.security.PerAgentProviderStore
 import com.dsh.mobile.service.AgentRuntimeService
 import com.dsh.mobile.watchdog.EngineWatchdog
 import kotlinx.coroutines.delay
@@ -36,6 +41,18 @@ data class ControlCenterState(
     val watchdog: EngineWatchdog.WatchdogState = EngineWatchdog.WatchdogState.Idle,
     val diagnostics: DiagnosticsStore.DiagnosticsState = DiagnosticsStore.DiagnosticsState(),
     val copiedFlash: String? = null,
+    /** Agents whose binary is actually on disk. */
+    val installedAgents: List<ActiveAgent> = emptyList(),
+    /** Current agent's provider id, base URL and masked key. */
+    val providerId: String = "deepseek",
+    val providerBaseUrl: String? = null,
+    val providerKeyMask: String = "",
+)
+
+/** Carries the two earlier combine results so the binding can be folded in. */
+private data class ProviderState(
+    val core: CoreState,
+    val resilience: ResilienceState,
 )
 
 /** Combine group 1: config + runtime status + approvals. */
@@ -54,9 +71,12 @@ private data class ResilienceState(
     val copiedFlash: String?,
 )
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ControlCenterViewModel(
+    private val appContext: Context,
     private val configStore: RuntimeConfigStore,
     private val vault: ApiKeyVault,
+    private val providers: PerAgentProviderStore,
     private val bootstrap: BootstrapManager,
     private val watchdog: EngineWatchdog,
     private val diagnostics: DiagnosticsStore,
@@ -108,6 +128,14 @@ class ControlCenterViewModel(
                 ResilienceState(boot, watch, diag, copyFlash)
             },
         ) { core, resilience ->
+            ProviderState(core, resilience)
+        }.combine(
+            configStore.config.flatMapLatest { providers.binding(it.agent.id) },
+        ) { state, bindingState ->
+            val core = state.core
+            val resilience = state.resilience
+            val bindingAgent = core.config.agent
+            val binding = bindingState
             ControlCenterState(
                 config = core.config,
                 deepseekKey = vault.apiKey(ApiKeyVault.Provider.DEEPSEEK).mask(),
@@ -121,6 +149,12 @@ class ControlCenterViewModel(
                 watchdog = resilience.watchdog,
                 diagnostics = resilience.diagnostics,
                 copiedFlash = resilience.copiedFlash,
+                installedAgents = AgentRuntime.installedAgents(
+                    AgentRuntime.agentsDir(appContext),
+                ),
+                providerId = binding.providerId,
+                providerBaseUrl = binding.baseUrl,
+                providerKeyMask = vault.agentKey(bindingAgent.id).mask(),
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ControlCenterState())
 
@@ -133,6 +167,38 @@ class ControlCenterViewModel(
             flash.value = true
             restartService()
             delay(2_500)
+            flash.value = false
+        }
+    }
+
+    /**
+     * Save one agent's provider, endpoint, model and (optional) key.
+     *
+     * A blank [key] means "keep the stored key", never "clear it": the settings
+     * form re-reads its masked placeholder on every recomposition, so treating
+     * blank as clear would silently wipe a credential whenever the user edited
+     * an unrelated field on the same screen.
+     *
+     * Does NOT restart the service when the change only affects agents other
+     * than the running one — an unnecessary restart would kill live work, which
+     * is exactly what the resume fix exists to prevent.
+     */
+    fun saveAgentProvider(
+        agentId: String,
+        providerId: String,
+        key: String?,
+        baseUrl: String,
+        model: String,
+    ) {
+        viewModelScope.launch {
+            runCatching { providers.setProvider(agentId, providerId) }
+            runCatching { providers.setBaseUrl(agentId, baseUrl) }
+            runCatching { providers.setModel(agentId, model) }
+            if (!key.isNullOrBlank()) providers.saveKeyFor(agentId, key)
+            flash.value = true
+            // Only the running agent's environment needs re-reading.
+            if (agentId == configStore.snapshot().agent.id) restartService()
+            delay(2_000)
             flash.value = false
         }
     }
@@ -234,18 +300,20 @@ class ControlCenterViewModel(
 
     companion object {
         fun factory(
+            appContext: Context,
             configStore: RuntimeConfigStore,
             vault: ApiKeyVault,
             bootstrap: BootstrapManager,
             watchdog: EngineWatchdog,
             diagnostics: DiagnosticsStore,
+            providers: PerAgentProviderStore,
             onRestartRequest: () -> Unit = {},
             commandDispatcher: (command: String) -> Unit = {},
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
                 ControlCenterViewModel(
-                    configStore, vault, bootstrap, watchdog, diagnostics,
+                    appContext, configStore, vault, providers, bootstrap, watchdog, diagnostics,
                     onRestartRequest, commandDispatcher,
                 ) as T
         }

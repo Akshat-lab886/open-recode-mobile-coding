@@ -72,6 +72,7 @@ fun ControlCenterContent(
     onWorkspacePicked: (String) -> Unit,
     onModeSelected: (AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
+    onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
 ) {
@@ -140,6 +141,22 @@ fun ControlCenterContent(
         AgentSelector(
             selected = uiState.config.agent,
             onSelected = onAgentSelected,
+        )
+
+        // -- e) per-agent provider -------------------------------------------
+        SectionHeader(
+            title = "Provider per agent",
+            icon = Icons.Default.Key,
+            subtitle = "Give each agent its own key and endpoint — including a " +
+                "model server on your own network.",
+        )
+        PerAgentProviderSection(
+            currentAgent = uiState.config.agent,
+            installedAgents = uiState.installedAgents,
+            bindingProviderId = uiState.providerId,
+            bindingBaseUrl = uiState.providerBaseUrl,
+            storedKeyMask = uiState.providerKeyMask,
+            onSave = onSaveAgentProvider,
         )
 
         Spacer(Modifier.height(tokens.spaceMd))

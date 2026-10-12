@@ -106,18 +106,54 @@ class AgentInstallStoreTest {
 
     // -- honesty guards ------------------------------------------------------
 
+    /**
+     * The honesty guard, corrected against verified registry data.
+     *
+     * Two of these were wrong when first written and the test caught it:
+     *  - `antigravity` on npm is NOT Google's. It is version 0.0.0, described
+     *    as "placeholder for the haters", and its bin is `kirox`. The real
+     *    Antigravity CLI is a Go binary from GitHub releases. So the catalogue
+     *    must NOT install it from npm at all.
+     *  - `hermes-agent` on npm is an unofficial third-party bridge (103 KB)
+     *    that then pulls a 1-3 GB runtime, not a small CLI.
+     */
     @Test
-    fun `unofficial packages are labelled`() {
-        val notes = AgentCatalog.all.filter { it.provenanceNote.isNotBlank() }
+    fun `unofficial or closed-source packages are labelled`() {
+        val hermes = AgentCatalog.specFor("hermes")!!
+        val anti = AgentCatalog.specFor("antigravity")!!
         assertTrue(
-            "the unofficial packages must be labelled, not passed off as official",
-            notes.isNotEmpty(),
+            "the unofficial Hermes bridge must say so",
+            hermes.provenanceNote.contains("Unofficial"),
         )
-        notes.forEach {
-            assertTrue(
-                "${it.id} note must name the problem",
-                it.provenanceNote.contains("Unofficial") ||
-                    it.provenanceNote.contains("Placeholder"),
+        assertTrue(
+            "closed-source Antigravity must say so",
+            anti.provenanceNote.contains("Closed source"),
+        )
+        assertTrue(
+            "Hermes' real size must be shown, not a flattering 90 MB guess",
+            hermes.approxInstallBytes >= 1024L * 1024 * 1024,
+        )
+    }
+
+    @Test
+    fun `antigravity is not installed from npm`() {
+        val anti = AgentCatalog.specFor("antigravity")!!
+        assertTrue(
+            "Antigravity must come from the real release tarball, not npm",
+            anti.install is com.dsh.mobile.data.InstallKind.Tarball,
+        )
+        val url = (anti.install as com.dsh.mobile.data.InstallKind.Tarball).urlTemplate
+        assertTrue("must point at the official release: $url", url.startsWith("https://github.com/google-antigravity/"))
+    }
+
+    @Test
+    fun `npm-installed agents name their real package`() {
+        AgentCatalog.all.forEach { spec ->
+            if (spec.install !is com.dsh.mobile.data.InstallKind.NPM) return@forEach
+            assertTrue("${spec.id} has no npm package", spec.npmPackage.isNotBlank())
+            assertFalse(
+                "no agent may be installed from the npm 'antigravity' placeholder",
+                spec.npmPackage.equals("antigravity", ignoreCase = true),
             )
         }
     }

@@ -69,11 +69,13 @@ class MainActivity : ComponentActivity() {
             DshMobileTheme {
                 val vm: ControlCenterViewModel = viewModel(
                     factory = ControlCenterViewModel.factory(
+                        appContext = app,
                         configStore = app.configStore,
                         vault = app.vault,
                         bootstrap = app.bootstrap,
                         watchdog = app.watchdog,
                         diagnostics = app.diagnostics,
+                        providers = app.perAgentProviders,
                         onRestartRequest = {
                             startAgentService(AgentRuntimeService.ACTION_RESTART)
                         },
@@ -150,6 +152,7 @@ class MainActivity : ComponentActivity() {
                         onWorkspacePicked = vm::setWorkspace,
                         onModeSelected = vm::setAgentMode,
                         onAgentSelected = vm::setActiveAgent,
+                        onSaveAgentProvider = vm::saveAgentProvider,
                         onApprovalResult = vm::resolveApproval,
                         onDismissApproval = vm::dismissApproval,
                         onWebApproval = vm::addWebApproval,

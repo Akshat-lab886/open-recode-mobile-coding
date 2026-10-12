@@ -106,6 +106,7 @@ fun DshMobileShell(
     onWorkspacePicked: (absolutePath: String) -> Unit,
     onModeSelected: (com.dsh.mobile.data.AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
+    onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
     onApprovalResult: (requestId: String, approved: Boolean) -> Unit,
     onDismissApproval: (requestId: String) -> Unit,
     onWebApproval: (summary: String) -> Unit,
@@ -196,6 +197,7 @@ fun DshMobileShell(
                 onWorkspacePicked = onWorkspacePicked,
                 onModeSelected = onModeSelected,
                 onAgentSelected = onAgentSelected,
+                onSaveAgentProvider = onSaveAgentProvider,
             )
         } else {
             CompactLayout(
@@ -273,6 +275,7 @@ fun DshMobileShell(
                         onWorkspacePicked = onWorkspacePicked,
                         onModeSelected = onModeSelected,
                         onAgentSelected = onAgentSelected,
+                        onSaveAgentProvider = onSaveAgentProvider,
                         modifier = Modifier.widthIn(max = DshTheme.tokens.contentMaxWidth),
                     )
                 }
@@ -416,6 +419,7 @@ private fun ExpandedLayout(
     onWorkspacePicked: (String) -> Unit,
     onModeSelected: (com.dsh.mobile.data.AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
+    onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
 ) {
     val tokens = DshTheme.tokens
     Scaffold(
@@ -459,6 +463,7 @@ private fun ExpandedLayout(
                             onWorkspacePicked = onWorkspacePicked,
                             onModeSelected = onModeSelected,
                             onAgentSelected = onAgentSelected,
+                            onSaveAgentProvider = onSaveAgentProvider,
                             modifier = Modifier.fillMaxSize(),
                             // Without this the panel is a one-way door: on a
                             // tablet there is no system back affordance to

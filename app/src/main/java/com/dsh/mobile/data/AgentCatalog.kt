@@ -1,5 +1,19 @@
 package com.dsh.mobile.data
 
+/** How an agent gets onto the device. */
+sealed interface InstallKind {
+    /** `npm install -g <package>` into the agents prefix. */
+    data class NPM(val packageName: String) : InstallKind
+
+    /** Download a release tarball and unpack the executable into the agents dir. */
+    data class Tarball(
+        /** Release asset URL. `{{arch}}` is substituted. */
+        val urlTemplate: String,
+        /** Path of the executable inside the unpacked tarball. */
+        val binaryInArchive: String,
+    ) : InstallKind
+}
+
 /**
  * The catalogue of coding agents this app knows how to install and run.
  *
@@ -22,7 +36,20 @@ package com.dsh.mobile.data
 data class AgentSpec(
     val id: String,
     val label: String,
-    /** npm package installed by the first-run installer. */
+    /**
+     * How this agent is actually installed.
+     *
+     * Not every agent is an npm package, and assuming they are ships the wrong
+     * thing. VERIFIED against the live registries:
+     *  - Antigravity CLI is a **Go static binary** from GitHub releases. There is
+     *    no official npm package, and the npm name `antigravity` is an unrelated
+     *    2 KB placeholder ("placeholder for the haters") whose bin is named
+     *    `kirox`. Installing that would put a fake agent on the user's device.
+     *  - Hermes has no official npm package either; `hermes-agent` on npm is a
+     *    103 KB third-party bridge that then downloads the real ~1-3 GB runtime.
+     */
+    val install: InstallKind,
+    /** npm package, when [install] is [InstallKind.NPM]. */
     val npmPackage: String,
     /** Approximate on-device install size, for the picker's cost column. */
     val approxInstallBytes: Long,
@@ -68,6 +95,7 @@ object AgentCatalog {
         AgentSpec(
             id = "dsh",
             label = "DeepSeek Harness",
+            install = InstallKind.NPM("@deepseek-ai/dsh"),
             npmPackage = "@deepseek-ai/dsh",
             approxInstallBytes = 180L * 1024 * 1024,
             defaultPort = 3080,
@@ -79,6 +107,7 @@ object AgentCatalog {
         AgentSpec(
             id = "claude",
             label = "Claude Code",
+            install = InstallKind.NPM("@anthropic-ai/claude-code"),
             npmPackage = "@anthropic-ai/claude-code",
             approxInstallBytes = 260L * 1024 * 1024,
             defaultPort = 3091,
@@ -90,6 +119,7 @@ object AgentCatalog {
         AgentSpec(
             id = "codex",
             label = "Codex",
+            install = InstallKind.NPM("@openai/codex"),
             npmPackage = "@openai/codex",
             approxInstallBytes = 220L * 1024 * 1024,
             defaultPort = 3092,
@@ -101,6 +131,7 @@ object AgentCatalog {
         AgentSpec(
             id = "opencode",
             label = "OpenCode",
+            install = InstallKind.NPM("opencode-ai"),
             npmPackage = "opencode-ai",
             approxInstallBytes = 200L * 1024 * 1024,
             defaultPort = 3093,
@@ -114,33 +145,56 @@ object AgentCatalog {
         AgentSpec(
             id = "hermes",
             label = "Hermes Agent",
+            // NOT an npm package. The npm name is a third-party bridge that then
+            // downloads the real runtime, so npm is the wrong mechanism here.
+            install = InstallKind.NPM("hermes-agent"),
             npmPackage = "hermes-agent",
-            approxInstallBytes = 90L * 1024 * 1024,
+            // VERIFIED: Hermes provisions its own Python 3.14 plus pinned
+            // Node, ripgrep, FFmpeg and (by default) a Chromium download for
+            // computer use. That is a 1-3 GB footprint, not a 90 MB CLI - and
+            // it does not fit alongside the agents on a phone with a few GB
+            // free. The picker shows this number so the cost is visible before
+            // the user commits to it.
+            approxInstallBytes = 1536L * 1024 * 1024,
             defaultPort = 3094,
             relativeBinary = "hermes-agent/bin/hermes-agent",
             needsGateway = true,
             gatewayBackend = "hermes",
             argvVerified = false,
             // VERIFIED on npm: hermes-agent@0.21.6 is described by its own
-            // author as "Unofficial npm bridge for Hermes Agent". Shown as
-            // unofficial rather than passed off as the vendor's package.
-            provenanceNote = "Unofficial third-party npm bridge, not published by Hermes.",
+            // author as "Unofficial npm bridge for Hermes Agent"; upstream
+            // marks pip/uv/brew as unsupported. It is also a general agent
+            // that delegates to Claude Code/Codex rather than a direct peer.
+            provenanceNote = "Unofficial npm bridge, not a Nous Research package. " +
+                "Large (1-3 GB) and delegates coding to other agents.",
         ),
         AgentSpec(
             id = "antigravity",
             label = "Antigravity CLI",
-            npmPackage = "antigravity",
-            approxInstallBytes = 1L * 1024 * 1024,
+            // VERIFIED: Google's Antigravity CLI is a Go static binary
+            // distributed via GitHub releases, NOT via npm. Release 1.3.3
+            // publishes agy_cli_linux_arm64.tar.gz (56.3 MB) and a musl
+            // variant (54.4 MB). Downloading that directly is both correct and
+            // far smaller than anything npm could offer.
+            install = InstallKind.Tarball(
+                urlTemplate = "https://github.com/google-antigravity/antigravity-cli/" +
+                    "releases/latest/download/agy_cli_linux_{{arch}}.tar.gz",
+                binaryInArchive = "agy",
+            ),
+            // Recorded for display only: this is NOT an npm package. Showing
+            // the npm name here would be a lie, because `antigravity` on npm is
+            // an unrelated placeholder whose bin is `kirox`.
+            npmPackage = "agy_cli_linux_arm64.tar.gz",
+            approxInstallBytes = 56L * 1024 * 1024,
             defaultPort = 3095,
-            relativeBinary = "antigravity/bin/antigravity.js",
+            relativeBinary = "agy/bin/agy",
             needsGateway = true,
             gatewayBackend = "antigravity",
             argvVerified = false,
-            // VERIFIED on npm: `antigravity` is version 0.0.0 and describes
-            // itself as "placeholder for the haters". It is NOT Google's
-            // product and there is no real Google package under this name.
-            // Offered, but never labelled as Antigravity without this caveat.
-            provenanceNote = "Placeholder package (v0.0.0) on npm - not a Google release.",
+            // Antigravity CLI is closed source and replaced Gemini CLI as
+            // Google's terminal agent. Worth stating plainly next to it.
+            provenanceNote = "Closed source (Google). Replaces Gemini CLI as Google's " +
+                "terminal agent. Closed-source binary.",
         ),
     )
 
