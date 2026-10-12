@@ -34,6 +34,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,14 +80,24 @@ fun ControlCenterContent(
     header: (@Composable () -> Unit)? = null,
 ) {
     val tokens = DshTheme.tokens
-    BoxWithConstraints(modifier.fillMaxSize()) {
+    // Upper bound for the scrolling column.
+    //
+    // A ModalBottomSheet measures its content with UNBOUNDED height, so
+    // fillMaxSize() there resolves to an infinite max and Compose throws
+    // "Vertically scrollable component was measured with an infinity maximum
+    // height constraints" - which crashed the app the moment Settings was
+    // opened. The tablet side panel has a real bounded height, but capping is
+    // safe in both: a bounded parent clips to its own size anyway.
+    val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.92f).dp
+    BoxWithConstraints(modifier.fillMaxWidth()) {
         // Two credential fields need real room to stay legible; below this
         // they are stacked, whatever the window is doing.
         val twoUp = maxWidth >= TWO_UP_MIN_WIDTH
 
         Column(
             Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .heightIn(max = maxHeight)
                 .verticalScroll(rememberScrollState()),
         ) {
             if (header != null) {
