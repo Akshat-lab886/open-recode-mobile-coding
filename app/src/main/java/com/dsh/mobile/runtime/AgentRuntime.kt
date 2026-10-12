@@ -3,6 +3,7 @@ package com.dsh.mobile.runtime
 import android.content.Context
 import android.system.Os
 import com.dsh.mobile.data.ActiveAgent
+import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.data.AgentMode
 import java.io.File
 import java.net.ServerSocket
@@ -320,20 +321,24 @@ object AgentRuntime {
         // The gateway wrapper serves its chat UI on the loopback port
         // (health-checked like every other backend) while keeping the
         // child's stdin/stdout pipes attached for approval interception.
-        ActiveAgent.CLAUDE_CODE -> listOf(
-            nodePath, "$agentsDir/visual-gateway/gateway.js",
-            "--backend", "claude",
-            "--port", port.toString(),
-            "--host", LOOPBACK_HOST,
-            "--", "$agentsDir/claude/bin/claude",
-        )
-        ActiveAgent.CODEX -> listOf(
-            nodePath, "$agentsDir/visual-gateway/gateway.js",
-            "--backend", "codex",
-            "--port", port.toString(),
-            "--host", LOOPBACK_HOST,
-            "--", "$agentsDir/codex/bin/codex",
-        )
+        // Gateway-wrapped agents share one argv shape, built from the catalogue
+        // so a new CLI-only agent needs no edit here. Only claude/codex are
+        // marked argvVerified; an unverified one still runs, but the UI warns
+        // that its flags have not been checked against the real --help.
+        ActiveAgent.CLAUDE_CODE,
+        ActiveAgent.CODEX,
+        ActiveAgent.HERMES,
+        ActiveAgent.ANTIGRAVITY,
+        -> {
+            val spec = requireNotNull(agent.spec) { "no catalog entry for $agent" }
+            listOf(
+                nodePath, "$agentsDir/visual-gateway/gateway.js",
+                "--backend", requireNotNull(spec.gatewayBackend),
+                "--port", port.toString(),
+                "--host", LOOPBACK_HOST,
+                "--", File(agentsDir, spec.relativeBinary).absolutePath,
+            )
+        }
         // NOT independently verified against the real `opencode serve
         // --help` — unlike the DSH branch, this one is carried over
         // unchanged, so treat its flag set as unconfirmed.
@@ -356,11 +361,25 @@ object AgentRuntime {
      * agent decision must therefore be checked against what is actually on
      * disk before anything is spawned.
      */
-    fun agentEntryPoint(agent: ActiveAgent, agentsDir: File): File? = when (agent) {
-        ActiveAgent.DEEPSEEK_HARNESS -> File(dshEntryPoint(agentsDir)).takeIf { it.isFile }
-        ActiveAgent.CLAUDE_CODE -> File(agentsDir, "claude/bin/claude").takeIf { it.isFile }
-        ActiveAgent.CODEX -> File(agentsDir, "codex/bin/codex").takeIf { it.isFile }
-        ActiveAgent.OPENCODE -> File(agentsDir, "opencode/bin/opencode").takeIf { it.isFile }
+    fun agentEntryPoint(agent: ActiveAgent, agentsDir: File): File? {
+        val spec = AgentCatalog.specFor(agent.id)
+        if (spec != null) {
+            // DSH is special-cased because it has two real on-disk layouts.
+            if (agent == ActiveAgent.DEEPSEEK_HARNESS) {
+                return File(dshEntryPoint(agentsDir)).takeIf { it.isFile }
+            }
+            return File(agentsDir, spec.relativeBinary).takeIf { it.isFile }
+        }
+        // Unknown agent: fall back to the legacy switch so a persisted config
+        // naming an agent this build no longer ships degrades instead of
+        // crashing the picker.
+        return when (agent) {
+            ActiveAgent.DEEPSEEK_HARNESS -> File(dshEntryPoint(agentsDir)).takeIf { it.isFile }
+            ActiveAgent.CLAUDE_CODE -> File(agentsDir, "claude/bin/claude").takeIf { it.isFile }
+            ActiveAgent.CODEX -> File(agentsDir, "codex/bin/codex").takeIf { it.isFile }
+            ActiveAgent.OPENCODE -> File(agentsDir, "opencode/bin/opencode").takeIf { it.isFile }
+            else -> null
+        }
     }
 
     fun isAgentInstalled(agent: ActiveAgent, agentsDir: File): Boolean =
@@ -383,7 +402,8 @@ object AgentRuntime {
 
     /** CLI-only agents render through the in-app visual gateway (no TCP server). */
     fun isGatewayAgent(agent: ActiveAgent): Boolean =
-        agent == ActiveAgent.CLAUDE_CODE || agent == ActiveAgent.CODEX
+        AgentCatalog.specFor(agent.id)?.needsGateway
+            ?: (agent == ActiveAgent.CLAUDE_CODE || agent == ActiveAgent.CODEX)
 
     /** Full environment for the child: silent key injection + workspace config. */
     fun buildEnvironment(

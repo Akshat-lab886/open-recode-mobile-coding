@@ -10,12 +10,34 @@ import kotlinx.coroutines.flow.map
 
 private val Context.runtimeDataStore by preferencesDataStore(name = "runtime_config")
 
-/** Which agent backend is currently bound to the WebView. */
-enum class ActiveAgent(val label: String, val defaultPort: Int) {
-    DEEPSEEK_HARNESS("DeepSeek Harness", 3080),
-    CLAUDE_CODE("Claude Code (via gateway)", 3091),
-    CODEX("Codex (via gateway)", 3092),
-    OPENCODE("OpenCode", 3093),
+/**
+ * Which agent backend is currently bound to the WebView.
+ *
+ * The install/run specifics live in [AgentCatalog]; this enum is the persisted,
+ * stable identity of an agent choice, so adding a catalogue entry never
+ * invalidates a user's saved config.
+ */
+enum class ActiveAgent(
+    val label: String,
+    val defaultPort: Int,
+    /**
+     * Stable id used to look this agent up in [AgentCatalog].
+     *
+     * Declared explicitly rather than derived from the enum name: the catalogue
+     * ids are short (dsh, claude, codex) and do not match the enum constants,
+     * so deriving silently produced ids that resolved to nothing.
+     */
+    val id: String,
+) {
+    DEEPSEEK_HARNESS("DeepSeek Harness", 3080, "dsh"),
+    CLAUDE_CODE("Claude Code (via gateway)", 3091, "claude"),
+    CODEX("Codex (via gateway)", 3092, "codex"),
+    OPENCODE("OpenCode", 3093, "opencode"),
+    HERMES("Hermes Agent (via gateway)", 3094, "hermes"),
+    ANTIGRAVITY("Antigravity CLI (via gateway)", 3095, "antigravity");
+
+    /** Catalogue entry backing this agent, if this build knows it. */
+    val spec: AgentSpec? get() = AgentCatalog.specFor(id)
 }
 
 /** Touch-driven replacement for CLI flags.
