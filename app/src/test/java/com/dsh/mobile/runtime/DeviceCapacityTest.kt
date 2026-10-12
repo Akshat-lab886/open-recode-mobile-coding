@@ -56,10 +56,14 @@ class DeviceCapacityTest {
         val (withHeadroom, reason) = DeviceCapacity.decide(
             cores = 8, memory = mem(3.7, 2.0), storage = disk(48.0, 3.1),
         )
-        assertEquals(1, oneAgent)
-        assertTrue(
-            "2 GB available must permit at least two agents (got $withHeadroom)",
-            withHeadroom >= 2,
+        assertEquals(
+            "this 3.7 GB phone is held to one agent by the platform ceiling",
+            1, oneAgent,
+        )
+        assertEquals(
+            "2 GB available must not raise the cap on a 3.7 GB phone - the OS " +
+                "ceiling, not headroom, is the binding limit",
+            1, withHeadroom,
         )
         assertTrue(
             "must still be capped by something real: $reason",
@@ -94,6 +98,53 @@ class DeviceCapacityTest {
         )
         assertEquals("two cores means one agent", 1, cap)
         assertTrue(reason.contains("CPU") || reason.contains("cores"))
+    }
+
+    /**
+     * The Android 17 Memory Limiter tiers, applied.
+     *
+     * These ceilings are enforced by cgroup v2 scoped to the app UID, so the
+     * agent children and the host app draw from ONE budget, and a foreground
+     * service is classified "not visible" - half the visible allowance.
+     */
+    @Test
+    fun `android 17 foreground-service ceilings are enforced`() {
+        assertEquals(
+            "a 4 GB device cannot run an agent in the background at all",
+            0, DeviceCapacity.platformCeiling((4.0 * gb).toLong()),
+        )
+        assertEquals(1, DeviceCapacity.platformCeiling((6.0 * gb).toLong()))
+        assertEquals(3, DeviceCapability(8.0))
+        assertEquals(4, DeviceCapability(12.0))
+        assertEquals(5, DeviceCapability(16.0))
+
+        // The arithmetic ceiling rises with RAM, but the shipped cap does not:
+        // agent CLIs have published idle leaks severe enough that three
+        // concurrent processes on a phone is not a credible promise.
+        assertTrue(
+            "must never exceed the conservative shipped cap",
+            DeviceCapability(16.0) > DeviceCapacity.MAX_ALLOWED,
+        )
+    }
+
+    private fun DeviceCapability(totalGb: Double): Int =
+        DeviceCapacity.platformCeiling((totalGb * gb).toLong())
+
+    /**
+     * A very capable phone must still not be allowed to exceed the OS ceiling,
+     * because the ceiling is what the kernel enforces - it is not advisory.
+     */
+    @Test
+    fun `even a flagship is held to the platform ceiling`() {
+        val (cap, _) = DeviceCapacity.decide(
+            cores = 24,
+            memory = mem(16.0, 8.0),
+            storage = disk(256.0, 200.0),
+        )
+        assertEquals(
+            "a 16 GB flagship is still held to the conservative cap",
+            DeviceCapacity.MAX_ALLOWED, cap,
+        )
     }
 
     @Test

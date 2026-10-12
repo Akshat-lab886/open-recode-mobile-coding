@@ -72,10 +72,19 @@ object DeviceCapacity {
      * 600 MB is used so the cap reacts before the system starts killing
      * processes under pressure.
      */
-    const val MEMORY_PER_AGENT = 600L * 1024 * 1024
+    const val MEMORY_PER_AGENT = 800L * 1024 * 1024
 
-    /** Absolute ceiling regardless of how capable the device looks. */
-    const val MAX_ALLOWED = 4
+    /**
+     * Absolute ceiling regardless of how capable the device looks.
+     *
+     * Two, not four. The arithmetic ceiling is higher on a 12-16 GB phone, but
+     * published agent-CLI reports show severe idle leaks (one 2 GB/min at 90%
+     * CPU while idle) and OOM kills under load. On a phone an over-eager cap
+     * does not degrade gracefully - the kernel kills a process, and the user's
+     * in-flight session dies with it. Erring low costs a feature; erring high
+     * loses work.
+     */
+    const val MAX_ALLOWED = 2
 
     fun readStorage(path: String): StorageInfo = runCatching {
         val stat = StatFs(path)
@@ -129,12 +138,20 @@ object DeviceCapacity {
         }
 
         val byCores = cores / 2
+        // Platform ceiling first: Android 17 enforces a per-UID cgroup budget
+        // that the service cannot query at runtime, so the tier table is the
+        // only honest source of the hard limit.
+        val byPlatform = platformCeiling(memory.totalBytes)
         val byMemory = (memory.availableBytes / memPerAgent).toInt()
         val byStorage = (storage.freeBytes / perAgentBytes).toInt()
 
-        val limit = minOf(byCores, byMemory, byStorage, MAX_ALLOWED).coerceAtLeast(1)
+        val limit = minOf(byCores, byPlatform, byMemory, byStorage, MAX_ALLOWED)
+            .coerceAtLeast(1)
 
         val reason = when (limit) {
+            byPlatform -> "Limited by the platform memory ceiling: a foreground " +
+                "service may use about ${byPlatform} agent(s) on a " +
+                "${memory.totalMegabytes / 1024} GB device."
             byStorage -> "Limited by storage: ${storage.freeMegabytes} MB free " +
                 "(${perAgentBytes / (1024 * 1024)} MB needed per agent)."
             byMemory -> "Limited by memory: ${memory.availableMegabytes} MB available " +
@@ -143,6 +160,43 @@ object DeviceCapacity {
             else -> "$limit concurrent agents supported."
         }
         return limit to reason
+    }
+
+    /**
+     * Maximum agents allowed by the OS memory budget for a foreground service.
+     *
+     * Android 17 (API 37) introduced the Memory Limiter: a cgroup v2 limit
+     * scoped to the app UID, which our exec'd agent children share with the
+     * Java heap and WebViews. It classifies a foreground service as **not
+     * visible**, which halves the allowance on every device tier, and it
+     * provides **no runtime query API** — so this must be derived from
+     * `totalMem`, not read back.
+     *
+     * Published ceilings (memNotVisible column), minus a 500 MB reserve for the
+     * host app, divided by [MEMORY_PER_AGENT]:
+     *
+     * | RAM    | service ceiling | usable | agents |
+     * |--------|-----------------|--------|--------|
+     * | 4 GB   | 1024 MiB        | 524    | 0      |
+     * | 6 GB   | 2048 MiB        | 1548   | 1      |
+     * | 8 GB   | 3072 MiB        | 2572   | 2      |
+     * | 12 GB  | 4096 MiB        | 3596   | 2      |
+     * | 16 GB+ | 5120 MiB        | 4620   | 2      |
+     */
+    private const val HOST_RESERVE_MB = 500L
+
+    fun platformCeiling(totalBytes: Long): Int {
+        val gb = totalBytes / (1024L * 1024 * 1024)
+        val serviceCeilingMb = when {
+            gb >= 16 -> 5120L
+            gb >= 12 -> 4096L
+            gb >= 8 -> 3072L
+            gb >= 6 -> 2048L
+            gb >= 4 -> 1024L
+            else -> 1024L
+        }
+        val usable = (serviceCeilingMb - HOST_RESERVE_MB).coerceAtLeast(0)
+        return (usable / (MEMORY_PER_AGENT / (1024 * 1024))).toInt()
     }
 
     /**

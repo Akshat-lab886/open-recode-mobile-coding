@@ -29,6 +29,18 @@ import java.net.ServerSocket
 object AgentRuntime {
 
     const val LOOPBACK_HOST = "127.0.0.1"
+    /**
+     * V8 old-space ceiling for the agent child, in MB.
+     *
+     * Node's 64-bit default is ~4200 MB, which exceeds the entire memory budget
+     * Android grants the app. Without an explicit cap an agent process grows
+     * until the system kills it, destroying live work. See buildArgv.
+     */
+    const val NODE_HEAP_MB = 512
+
+    /** V8 semi-space size in MB; the 16 MB default is pure overhead here. */
+    const val NODE_SEMI_SPACE_MB = 4
+
     const val PORT_RANGE_START = 3080
     const val PORT_RANGE_END = 3999
 
@@ -307,6 +319,21 @@ object AgentRuntime {
             // and the server never starts. This is a NODE flag, so it goes
             // after the interpreter and before the script.
             "--expose-internals",
+            // Memory caps - CRITICAL on a phone.
+            //
+            // Node's default V8 heap limit on 64-bit is ~4.2 GB. On a phone that
+            // is larger than the entire RAM budget available to the app, so an
+            // uncapped agent child will happily grow until the system kills it,
+            // taking the user's in-flight session with it. Measured Node arm64
+            // baseline is ~41 MB, and an agent session realistically settles at
+            // 400 MB - 2 GB. Capping the heap at 512 MB makes V8 collect
+            // eagerly instead of letting the process grow to the phone's limit.
+            //
+            // The small semi-space matters more than it looks: the default is
+            // 16 MB per semi-space *per isolate*, which is pure overhead against
+            // a tight cgroup budget.
+            "--max-old-space-size=$NODE_HEAP_MB",
+            "--max-semi-space-size=$NODE_SEMI_SPACE_MB",
             // VERIFIED entry point: the declared bin is lib/bin.js. See
             // [dshEntryPoint] for why two parent layouts are accepted.
             dshEntryPoint(agentsDir),
@@ -331,7 +358,12 @@ object AgentRuntime {
         -> {
             val spec = requireNotNull(agent.spec) { "no catalog entry for $agent" }
             listOf(
-                nodePath, "$agentsDir/visual-gateway/gateway.js",
+                nodePath,
+                // Same reasoning as the DSH branch: an uncapped V8 heap on a
+                // phone grows until the system kills the session.
+                "--max-old-space-size=$NODE_HEAP_MB",
+                "--max-semi-space-size=$NODE_SEMI_SPACE_MB",
+                "$agentsDir/visual-gateway/gateway.js",
                 "--backend", requireNotNull(spec.gatewayBackend),
                 "--port", port.toString(),
                 "--host", LOOPBACK_HOST,

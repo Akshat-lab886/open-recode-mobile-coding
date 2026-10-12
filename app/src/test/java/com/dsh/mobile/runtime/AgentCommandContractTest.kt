@@ -131,9 +131,24 @@ private val dshAllowedOptions = setOf(
         // dsh refuses to load its plugin tree without it ("cordis-plugin-hmr:
         // --expose-internals is required for HMR service").
         assertEquals("--expose-internals", argv[1])
+        // Position-based assertions are brittle: the argv legitimately grows
+        // when a V8 memory cap is added. Assert the script is present and comes
+        // after the node flags instead of pinning an exact index.
         assertTrue(
             "must run the real lib/bin.js, not an npm shim: $argv",
-            argv[2].endsWith("dsh/lib/bin.js"),
+            argv.any { it.endsWith("dsh/lib/bin.js") },
+        )
+        val scriptIdx = argv.indexOfFirst { it.endsWith("dsh/lib/bin.js") }
+        assertTrue(
+            "every node flag must precede the script: $argv",
+            argv.subList(1, scriptIdx).all { it.startsWith("--") },
+        )
+        // CRITICAL on a phone: Node's default V8 heap is ~4200 MB, larger than
+        // the whole app memory budget, so an uncapped child grows until the
+        // system kills it and takes the user's session with it.
+        assertTrue(
+            "the agent child must be given an explicit V8 heap cap: $argv",
+            argv.any { it.startsWith("--max-old-space-size=") },
         )
     }
 
@@ -199,7 +214,14 @@ private val dshAllowedOptions = setOf(
         // buildCommand: the proot wrapper moved, these two must not.
         for (agent in listOf(ActiveAgent.CLAUDE_CODE, ActiveAgent.CODEX)) {
             val argv = AgentRuntime.buildArgv(agent, node, agents, port)
-            assertTrue("$agent must run the visual gateway: $argv", argv[1].endsWith("visual-gateway/gateway.js"))
+            assertTrue(
+                "$agent must run the visual gateway: $argv",
+                argv.any { it.endsWith("visual-gateway/gateway.js") },
+            )
+            assertTrue(
+                "$agent gateway node must be heap-capped too: $argv",
+                argv.any { it.startsWith("--max-old-space-size=") },
+            )
             assertEquals("$port", argv[argv.indexOf("--port") + 1])
             assertEquals("127.0.0.1", argv[argv.indexOf("--host") + 1])
         }

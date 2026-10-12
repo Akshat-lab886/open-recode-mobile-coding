@@ -179,13 +179,20 @@ object AgentCatalog {
             install = InstallKind.Tarball(
                 urlTemplate = "https://github.com/google-antigravity/antigravity-cli/" +
                     "releases/latest/download/agy_cli_linux_{{arch}}.tar.gz",
-                binaryInArchive = "agy",
+                // VERIFIED by downloading release 1.3.3 and listing the archive:
+                // the executable inside is named `antigravity`, NOT `agy`. The
+                // command you type is `agy`; the file on disk is `antigravity`.
+                // Matching on "agy" would have extracted nothing at all.
+                binaryInArchive = "antigravity",
             ),
             // Recorded for display only: this is NOT an npm package. Showing
             // the npm name here would be a lie, because `antigravity` on npm is
             // an unrelated placeholder whose bin is `kirox`.
-            npmPackage = "agy_cli_linux_arm64.tar.gz",
-            approxInstallBytes = 56L * 1024 * 1024,
+            npmPackage = "agy_cli_linux_arm64.tar.gz (GitHub release)",
+            // 56 MB compressed, but 204 MB on disk once unpacked - and the
+            // picker's cost column has to show what the user's storage actually
+            // gives up, not the download size.
+            approxInstallBytes = 204L * 1024 * 1024,
             defaultPort = 3095,
             relativeBinary = "agy/bin/agy",
             needsGateway = true,
