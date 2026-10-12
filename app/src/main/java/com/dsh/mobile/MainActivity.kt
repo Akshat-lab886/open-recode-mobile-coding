@@ -233,7 +233,10 @@ class MainActivity : ComponentActivity() {
                     app.agentInstalls.markCompleted(result.spec.id)
                     Log.i(TAG, "installed ${result.spec.id}")
                 } else {
+                    // The reason is what makes a failure debuggable at all;
+                    // npm's own last lines are the only evidence there is.
                     Log.w(TAG, "install failed ${result.spec.id}: ${result.failure}")
+                    Log.w(TAG, "install output for ${result.spec.id}:\n${result.output}")
                 }
             }
             app.agentInstalls.recordSelection(chosen)

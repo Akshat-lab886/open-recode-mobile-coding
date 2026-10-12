@@ -200,6 +200,23 @@ class AgentInstaller(private val context: Context) {
                 // npm needs a writable cache inside the app sandbox.
                 environment()["HOME"] = npmHome.absolutePath
                 environment()["npm_config_cache"] = npmCache.absolutePath
+                // REQUIRED, not optional. The bundled libnode.so links against
+                // libz.so.1 and friends, which are shipped as assets unpacked to
+                // filesDir rather than sitting beside the interpreter in
+                // nativeLibraryDir. Without this the installer never runs at all:
+                //
+                //   CANNOT LINK EXECUTABLE "libnode.so": library "libz.so.1" not found
+                //
+                // and every optional agent silently "failed to install" while npm
+                // had in fact never started. These are the same variables the
+                // agent launch path sets - see AgentRuntime.buildEnvironment -
+                // so the two must stay in step or the app breaks in exactly this
+                // way again.
+                val native = AgentRuntime.nativePaths(context)
+                environment()["LD_LIBRARY_PATH"] = "${native.libsDir}:${native.nativeLibDir}"
+                environment()["OPENSSL_CONF"] = native.opensslConf
+                environment()["TMPDIR"] = native.scratchDir
+                environment()["npm_config_registry"] = "https://registry.npmjs.org"
             }.start()
         } catch (e: Exception) {
             return@withContext Result(spec, installed = false, failure = "Could not start npm: ${e.message}")
@@ -231,9 +248,14 @@ class AgentInstaller(private val context: Context) {
         if (exit == 0 && landed) {
             Result(spec, installed = true, output = log.toString())
         } else {
+            // Say WHY, using npm's own last lines. "npm exited 1" on its own is
+            // what made this failure invisible: the real reason (a missing
+            // shared library, a 403, an out-of-space error) was captured here
+            // and then thrown away, so the app could only report that
+            // something had failed without ever saying what.
             Result(
                 spec, installed = false, output = log.toString(),
-                failure = if (exit != 0) "npm exited $exit" else "npm finished but the binary is missing",
+                failure = describeFailure(exit, landed, log.toString()),
             )
         }
     }
@@ -298,6 +320,29 @@ class AgentInstaller(private val context: Context) {
 
     companion object {
         const val INSTALL_TIMEOUT_MINUTES = 10L
+
+        /**
+         * A failure message a user can act on, built from npm's own last lines.
+         *
+         * npm's output is the only evidence available when an install fails,
+         * and discarding it is what turned a missing shared library into an
+         * unexplained failure for every optional agent. Lives in the companion
+         * so it needs no Context and can be asserted on the JVM.
+         */
+        internal fun describeFailure(exit: Int, landed: Boolean, log: String): String {
+            val tail = log.lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .takeLast(3)
+                .joinToString(" | ")
+                .take(240)
+            val headline = when {
+                !landed && exit == 0 -> "npm finished but the agent binary is missing"
+                exit != 0 -> "npm exited $exit"
+                else -> "install did not complete"
+            }
+            return if (tail.isBlank()) headline else "$headline: $tail"
+        }
     }
 }
 
