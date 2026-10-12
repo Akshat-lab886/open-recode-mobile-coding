@@ -147,6 +147,14 @@ class AgentInstaller(private val context: Context) {
 
     fun agentsDir(): File = AgentRuntime.agentsDir(context)
 
+    /** First non-blank line of a transcript, for the session list preview. */
+    fun buildPreviewOf(logFile: File, maxChars: Int = 160): String {
+        if (!logFile.isFile) return ""
+        return runCatching {
+            logFile.useLines { it.firstOrNull { l -> l.isNotBlank() }?.take(maxChars) ?: "" }
+        }.getOrDefault("")
+    }
+
     /**
      * npm's own JS entry point, next to the interpreter that will run it.
      *

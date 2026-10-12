@@ -32,6 +32,12 @@ class DshMobileApp : Application() {
 
     lateinit var diagnostics: DiagnosticsStore
 
+    /** Local-only session history, pruned to bounded size. */
+    lateinit var sessionHistory: com.dsh.mobile.data.SessionHistoryStore
+
+    /** Per-agent provider choice, base URL and encrypted key. */
+    lateinit var perAgentProviders: com.dsh.mobile.security.PerAgentProviderStore
+
     /** Which agents the user chose to install, and whether that happened. */
     lateinit var agentInstalls: com.dsh.mobile.data.AgentInstallStore
 
@@ -48,12 +54,19 @@ class DshMobileApp : Application() {
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
     )
 
+    /** Fire-and-forget scope for archiving session summaries. */
+    val sessionHistoryScope: kotlinx.coroutines.CoroutineScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
+
     override fun onCreate() {
         super.onCreate()
         vault = ApiKeyVault(this)
         configStore = RuntimeConfigStore(this)
         bootstrap = BootstrapManager(this)
         diagnostics = DiagnosticsStore(this)
+        sessionHistory = com.dsh.mobile.data.SessionHistoryStore(this)
+        perAgentProviders = com.dsh.mobile.security.PerAgentProviderStore(this, vault)
         agentInstalls = com.dsh.mobile.data.AgentInstallStore(this)
         agentInstaller = com.dsh.mobile.runtime.AgentInstaller(this)
         watchdog = EngineWatchdog(

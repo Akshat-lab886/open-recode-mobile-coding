@@ -23,6 +23,7 @@ import com.dsh.mobile.ui.GatewayEventBus
 import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +60,9 @@ class AgentRuntimeService : LifecycleService() {
 
     private var bootJob: Job? = null
     private var child: Process? = null
+
+    /** Epoch ms when the current agent went Running; 0 when nothing is running. */
+    private var startedAt: Long = 0L
     private var gateway: VisualGateway? = null
 
     private val _status = MutableStateFlow<ServiceStatus>(ServiceStatus.Idle)
@@ -270,7 +274,23 @@ private suspend fun isAlreadyServing(): Boolean {
                 }
 
                 // 2. Inject API keys silently as env vars.
-                val apiEnv = app.vault.asEnvironment()
+                //
+                // Per-agent bindings win over the global provider keys, so each
+                // agent can use its own provider and base URL (including a
+                // self-hosted or local model server). Falling back to the shared
+                // environment keeps existing single-provider setups working
+                // with no migration.
+                val binding = app.perAgentProviders.binding(agent.id).first()
+                val perAgentEnv = app.perAgentProviders
+                    .environmentFor(agent.id, binding.providerId, binding.baseUrl)
+                val apiEnv = if (perAgentEnv.isNotEmpty()) {
+                    app.vault.asEnvironment() + perAgentEnv
+                } else {
+                    app.vault.asEnvironment()
+                }
+                if (binding.baseUrl != null) {
+                    Log.i(TAG, "using custom endpoint for ${agent.id}")
+                }
                 val env = AgentRuntime.buildEnvironment(
                     apiEnv = apiEnv,
                     workspace = workspace,
@@ -367,6 +387,7 @@ private suspend fun isAlreadyServing(): Boolean {
                     watchForLaunchUrl(process, logFile, launchUrl, agent, port, workspace)
                 }
 
+                startedAt = System.currentTimeMillis()
                 updateNotification("${agent.label} running on :$port")
                 setStatus(
                     ServiceStatus.Running(
@@ -519,6 +540,49 @@ private suspend fun isAlreadyServing(): Boolean {
 
     // -- lifecycle helpers --------------------------------------------------
 
+    /**
+     * Persist a summary of the session that just ended.
+     *
+     * Local-only: the record goes to app-private DataStore and the transcript
+     * path it points at, both inside filesDir. Nothing here touches the
+     * network, and that is the requirement, not an implementation detail.
+     *
+     * Runs on a fire-and-forget scope rather than inline because stopChildLocked
+     * is called from boot() pre-emption, where blocking on DataStore would delay
+     * the restart the user actually asked for.
+     */
+    private fun archiveSessionIfRunning() {
+        val status = _status.value
+        if (status !is ServiceStatus.Running) {
+            startedAt = 0
+            return
+        }
+        val app = application as DshMobileApp
+        val started = startedAt
+        startedAt = 0
+        if (started <= 0L) return
+
+        val agent = status.agent
+        val logFile = AgentRuntime.logFile(this, agent)
+        app.sessionHistoryScope.launch {
+            runCatching {
+                app.sessionHistory.record(
+                    com.dsh.mobile.data.SessionHistoryStore.Session(
+                        id = "$started-${agent.id}",
+                        agentId = agent.id,
+                        label = agent.label,
+                        startedAt = started,
+                        endedAt = System.currentTimeMillis(),
+                        workspace = status.workspace,
+                        preview = com.dsh.mobile.runtime.AgentInstaller(this@AgentRuntimeService)
+                            .let { runCatching { it.buildPreviewOf(logFile) }.getOrDefault("") },
+                        logFile = logFile.absolutePath,
+                    ),
+                )
+            }.onFailure { Log.w(TAG, "could not archive session", it) }
+        }
+    }
+
     private fun stopChild() {
         bootJob?.cancel()
         bootJob = null
@@ -527,6 +591,7 @@ private suspend fun isAlreadyServing(): Boolean {
 
     /** Kills the child process + gateway without touching the boot job. */
     private fun stopChildLocked() {
+        archiveSessionIfRunning()
         runCatching { (application as DshMobileApp).watchdog.stop() }
         gateway?.detach()
         gateway = null
