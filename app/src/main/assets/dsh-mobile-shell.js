@@ -451,6 +451,64 @@
     );
   }
 
+
+  /**
+   * Explain the disabled composer instead of leaving it silent.
+   *
+   * Audited on-device: "Add attachment", "Commands" and "Send message" render
+   * enabled-looking but carry the disabled attribute, with no title, no
+   * aria-label reason and no feedback on tap. The cause is that the agent has
+   * no model provider configured - the app's own provider settings are injected
+   * as environment variables for CLI agents, while the DSH web UI keeps its
+   * provider in the agent's own configuration.
+   *
+   * So the hint points at the agent's real Settings -> Models tab, which is the
+   * path that actually configures the web composer. Inventing an error the
+   * agent does not produce would be worse than explaining the true one.
+   */
+  function explainDisabledComposer() {
+    var style = document.getElementById('dsh-hint-style');
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'dsh-hint-style';
+      style.textContent =
+        '#dsh-no-provider-hint{position:fixed;left:0;right:0;bottom:0;z-index:2147483000;' +
+        'padding:10px 14px calc(10px + env(safe-area-inset-bottom));' +
+        'background:var(--dsh-surface,#16161a);color:#e6e6ea;font:13px/1.45 system-ui,sans-serif;' +
+        'border-top:1px solid rgba(255,255,255,.12);display:flex;gap:10px;align-items:center;' +
+        'justify-content:space-between}' +
+        '#dsh-no-provider-hint button{font:inherit;padding:8px 12px;min-height:44px;' +
+        'border-radius:8px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit}' +
+        '#dsh-no-provider-hint span{flex:1}';
+      (document.head || document.documentElement).appendChild(style);
+    }
+
+    var attach = document.querySelector('button[aria-label="Add attachment"]');
+    var send = document.querySelector('button[aria-label="Send message"]');
+    var blocked = (attach && attach.disabled) || (send && send.disabled);
+    var existing = document.getElementById('dsh-no-provider-hint');
+    if (!blocked) {
+      if (existing && existing.parentNode) existing.parentNode.removeChild(existing);
+      return;
+    }
+    if (existing) return;
+
+    var hint = document.createElement('div');
+    hint.id = 'dsh-no-provider-hint';
+    var msg = document.createElement('span');
+    msg.textContent =
+      'Chat and attachments are off until a model is set. Open the agent\u2019s Settings \u2192 Models.';
+    var go = document.createElement('button');
+    go.textContent = 'Open';
+    go.addEventListener('click', function () {
+      var btn = document.querySelector('button[aria-label="Settings"]');
+      if (btn) btn.click();
+    });
+    hint.appendChild(msg);
+    hint.appendChild(go);
+    document.body.appendChild(hint);
+  }
+
   /** Re-measure after a resize, keyboard show/hide, or rotation. */
   function syncViewportHeight() {
     document.documentElement.style.setProperty('--dsh-vh', viewportHeight());
@@ -514,6 +572,7 @@
     // Delegated at the document level, so it survives the SPA replacing the
     // header. Re-running is a no-op thanks to the guard inside.
     bridgeWorkspacePicker();
+    explainDisabledComposer();
   }
 
   apply();

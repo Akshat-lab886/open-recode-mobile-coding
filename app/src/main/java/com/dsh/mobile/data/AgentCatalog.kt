@@ -171,37 +171,37 @@ object AgentCatalog {
         AgentSpec(
             id = "antigravity",
             label = "Antigravity CLI",
-            // VERIFIED: Google's Antigravity CLI is a Go static binary
-            // distributed via GitHub releases, NOT via npm. Release 1.3.3
-            // publishes agy_cli_linux_arm64.tar.gz (56.3 MB) and a musl
-            // variant (54.4 MB). Downloading that directly is both correct and
-            // far smaller than anything npm could offer.
+            // VERIFIED by downloading and inspecting the binary, not by
+            // reading docs:
+            //
+            // Antigravity CLI ships a NATIVE Android ARM64 build - ELF64
+            // AArch64 PIE, PT_INTERP=/system/bin/linker64, linked against
+            // Bionic, with no glibc or musl dependencies. That is the build
+            // this app wants, because the agent already runs natively inside
+            // the app sandbox (no proot). The GitHub release assets are all
+            // glibc-linked and would need a compat layer to execute here.
+            //
+            // The binary inside the archive is named `antigravity`, not `agy`;
+            // `agy` is the command you type.
             install = InstallKind.Tarball(
-                urlTemplate = "https://github.com/google-antigravity/antigravity-cli/" +
-                    "releases/latest/download/agy_cli_linux_{{arch}}.tar.gz",
-                // VERIFIED by downloading release 1.3.3 and listing the archive:
-                // the executable inside is named `antigravity`, NOT `agy`. The
-                // command you type is `agy`; the file on disk is `antigravity`.
-                // Matching on "agy" would have extracted nothing at all.
+                urlTemplate = "https://storage.googleapis.com/antigravity-public/" +
+                    "antigravity-cli/1.3.3-5524738307653632/android-arm/cli_android_{{arch}}.tar.gz",
                 binaryInArchive = "antigravity",
             ),
-            // Recorded for display only: this is NOT an npm package. Showing
-            // the npm name here would be a lie, because `antigravity` on npm is
-            // an unrelated placeholder whose bin is `kirox`.
-            npmPackage = "agy_cli_linux_arm64.tar.gz (GitHub release)",
-            // 56 MB compressed, but 204 MB on disk once unpacked - and the
-            // picker's cost column has to show what the user's storage actually
-            // gives up, not the download size.
-            approxInstallBytes = 204L * 1024 * 1024,
+            // Display string only. This is NOT an npm package - the npm name
+            // `antigravity` is an unrelated placeholder whose bin is `kirox`.
+            npmPackage = "Native Android ARM64 build (Google CDN)",
+            // 51.6 MiB compressed, ~168 MiB unpacked. The cost column shows
+            // what the user's storage actually gives up, not the download size.
+            approxInstallBytes = 176L * 1024 * 1024,
             defaultPort = 3095,
             relativeBinary = "agy/bin/agy",
             needsGateway = true,
             gatewayBackend = "antigravity",
             argvVerified = false,
-            // Antigravity CLI is closed source and replaced Gemini CLI as
-            // Google's terminal agent. Worth stating plainly next to it.
-            provenanceNote = "Closed source (Google). Replaces Gemini CLI as Google's " +
-                "terminal agent. Closed-source binary.",
+            provenanceNote = "Closed source (Google), ships an official native Android " +
+                "build, but Android is not in Google's documented support list. " +
+                "Needs a model configured in its own settings before it will run.",
         ),
     )
 

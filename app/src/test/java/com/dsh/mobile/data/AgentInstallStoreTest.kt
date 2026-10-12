@@ -143,7 +143,12 @@ class AgentInstallStoreTest {
             anti.install is com.dsh.mobile.data.InstallKind.Tarball,
         )
         val url = (anti.install as com.dsh.mobile.data.InstallKind.Tarball).urlTemplate
-        assertTrue("must point at the official release: $url", url.startsWith("https://github.com/google-antigravity/"))
+        // Google hosts the CLI on its own CDN; the GitHub release assets are
+        // glibc-linked and cannot execute inside the app sandbox. The Android
+        // build is Bionic (PT_INTERP=/system/bin/linker64), which is what the
+        // agent actually needs here since it runs natively, without proot.
+        assertTrue("must come from Google's own CDN: $url", url.startsWith("https://storage.googleapis.com/antigravity-public/antigravity-cli/"))
+        assertTrue("must request the Android asset: $url", url.contains("android-arm"))
     }
 
     @Test
