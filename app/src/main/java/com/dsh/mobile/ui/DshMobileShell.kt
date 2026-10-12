@@ -330,7 +330,13 @@ private fun CompactLayout(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { ShellTitle(uiState.config.agent, uiState.serviceStatus, compact = true) },
+                title = {
+                    ShellTitle(
+                        displayedAgent(uiState.config.agent, uiState.serviceStatus),
+                        uiState.serviceStatus,
+                        compact = true,
+                    )
+                },
                 actions = {
                     IconButton(onClick = onTapStatus) {
                         // StatusDot is a Box, not an Icon, so it contributes no
@@ -635,7 +641,11 @@ private fun StatusPanel(
                 .padding(horizontal = tokens.spaceLg, vertical = tokens.spaceXl),
             verticalArrangement = Arrangement.spacedBy(tokens.spaceLg),
         ) {
-            ShellTitle(uiState.config.agent, uiState.serviceStatus, compact = false)
+            ShellTitle(
+                displayedAgent(uiState.config.agent, uiState.serviceStatus),
+                uiState.serviceStatus,
+                compact = false,
+            )
             Spacer(Modifier.height(tokens.spaceXs))
 
             val status = uiState.serviceStatus
@@ -740,6 +750,22 @@ private fun QuickCommandGrid(onCommand: (String) -> Unit) {
 }
 
 // -- Shared bits --------------------------------------------------------------
+
+/**
+ * The agent the app bar should name.
+ *
+ * The configured agent is what the user *picked*; the running agent is what
+ * actually *served*. Those differ whenever the configured one is not installed
+ * and the service falls back, and the bar was naming the configured one - so a
+ * device running DeepSeek Harness displayed "Claude Code (via gateway)" while
+ * the log correctly said it fell back. A status line that names the wrong agent
+ * is the same class of lie as a green check on a broken build, just quieter.
+ */
+internal fun displayedAgent(
+    configured: ActiveAgent,
+    status: AgentRuntimeService.ServiceStatus,
+): ActiveAgent =
+    (status as? AgentRuntimeService.ServiceStatus.Running)?.agent ?: configured
 
 /**
  * App-bar identity.
