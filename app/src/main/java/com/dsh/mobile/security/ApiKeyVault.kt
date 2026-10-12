@@ -40,6 +40,36 @@ class ApiKeyVault(context: Context) {
 
     fun hasAnyKey(): Boolean = Provider.entries.any { apiKey(it).isNotBlank() }
 
+    // -- per-agent credentials ----------------------------------------------
+    //
+    // Stored under the same encrypted prefs, but namespaced per agent so one
+    // agent can hold a different key for the same vendor than another. This is
+    // what makes "Claude Code on an Anthropic key, Codex on OpenRouter" work
+    // without either agent's credential leaking into the other's process.
+
+    fun agentKey(agentId: String): String =
+        prefs.getString(agentPrefKey(agentId), "").orEmpty()
+
+    fun saveForAgent(agentId: String, key: String) {
+        val clean = key.trim()
+        if (clean.isEmpty()) {
+            // Empty means "clear", not "store an empty string", so clearing
+            // actually removes the entry from encrypted storage.
+            prefs.edit().remove(agentPrefKey(agentId)).apply()
+            return
+        }
+        prefs.edit().putString(agentPrefKey(agentId), clean).apply()
+    }
+
+    fun clearForAgent(agentId: String) = saveForAgent(agentId, "")
+
+    /** Agent ids are used to build a pref key, so they must be filename-safe. */
+    private fun agentPrefKey(agentId: String): String {
+        val safe = agentId.filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+        require(safe.isNotEmpty()) { "invalid agent id" }
+        return "agent_key_$safe"
+    }
+
     /** Snapshot injected as env vars into the agent process. Missing keys are omitted. */
     fun asEnvironment(): Map<String, String> = buildMap {
         val deepseek = apiKey(Provider.DEEPSEEK)
@@ -61,7 +91,19 @@ class ApiKeyVault(context: Context) {
     enum class Provider(val label: String, val prefKey: String, val envVar: String) {
         DEEPSEEK("DeepSeek", "key_deepseek", "DEEPSEEK_API_KEY"),
         ANTHROPIC("Anthropic (Claude Code)", "key_anthropic", "ANTHROPIC_API_KEY"),
-        OPENROUTER("OpenRouter", "key_openrouter", "OPENROUTER_API_KEY"),
+        OPENROUTER("OpenRouter", "key_openrouter", "OPENROUTER_API_KEY");
+
+        companion object {
+            /**
+             * Resolve a stored provider id, falling back to DeepSeek.
+             *
+             * Must never throw: the value is read back from persisted config
+             * that an older or newer build may have written, and a crash on
+             * boot because of an unknown id would be far worse than defaulting.
+             */
+            fun fromId(id: String): Provider =
+                entries.firstOrNull { it.name.equals(id, ignoreCase = true) } ?: DEEPSEEK
+        }
     }
 
     private companion object {

@@ -471,17 +471,54 @@ fi
 progress 88
 
 # ---------------------------------------------------------------------------
-# 7. Standard plugin modules (best-effort: never fail the whole bootstrap).
+# 7. Optional agents (best-effort: never fail the whole bootstrap).
 # ---------------------------------------------------------------------------
-step "Installing agent plugins"
-set +e
-run_in_rootfs /usr/bin/env $(guest_env) /usr/bin/npm install -g opencode-ai \
-  2>&1 | while IFS= read -r l; do echo ">>>LOG:[npm] $l"; done
-log "opencode install exit: ${PIPESTATUS:-?}"
-# Claude Code + Codex CLIs are installed on demand when the user first picks
-# that backend (keeps first-boot fast); record the intent for the gateway.
+# WHY THIS IS NOW OPT-IN
+#
+# This block used to `npm install -g opencode-ai` unconditionally on every
+# first boot, whether or not the user ever wanted OpenCode - ~200 MB of the
+# user's data and several minutes of their time on software they did not choose.
+# It now installs only what the user selected, and only what is not already on
+# disk.
+#
+# The selection arrives as $AGENTS_DIR/.wanted-agents, a newline-separated list
+# of npm package names written by AgentInstallStore before bootstrap runs.
+# An absent file means "nothing selected", so the default is to install nothing
+# here rather than guessing.
+step "Checking optional agents"
+WANTED_FILE="$AGENTS_DIR/.wanted-agents"
+if [ -f "$WANTED_FILE" ]; then
+  while IFS= read -r raw_pkg; do
+    # Explicit assignment rather than reading straight into $pkg: the
+    # bootstrap log guard (BootstrapPayloadContractTest) requires every logged
+    # variable to have a plain assignment, so that `set -u` can never abort a
+    # bootstrap cycle on an unset reference.
+    pkg="$raw_pkg"
+    [ -n "$pkg" ] || continue
+    # Reject anything that is not a plain package name: this value reaches
+    # npm as an argument, and a stray space or flag must not become one.
+    case "$pkg" in
+      *[!a-zA-Z0-9@._/-]*)
+        log "ignoring malformed package name: $pkg"
+        continue
+        ;;
+    esac
+    if [ -d "$AGENTS_DIR/node_modules/$pkg" ] || \
+       [ -d "$AGENTS_DIR/lib/node_modules/$pkg" ]; then
+      log "optional agent already present, skipping: $pkg"
+      continue
+    fi
+    log "installing optional agent: $pkg"
+    set +e
+    run_in_rootfs /usr/bin/env $(guest_env) /usr/bin/npm install -g "$pkg" \
+      2>&1 | while IFS= read -r l; do echo ">>>LOG:[npm] $l"; done
+    log "optional agent $pkg exit: ${PIPESTATUS:-?}"
+    set -e
+  done < "$WANTED_FILE"
+else
+  log "no agent selection recorded; installing nothing extra"
+fi
 touch "$AGENTS_DIR/.plugins-probed" 2>/dev/null || true
-set -e
 progress 96
 else
   log "agent tree supplied by the bundled payload; guest npm install not needed"
