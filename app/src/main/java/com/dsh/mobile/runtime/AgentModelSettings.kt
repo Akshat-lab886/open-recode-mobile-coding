@@ -31,6 +31,25 @@ import java.io.File
  * Writing the wrong namespace here is what produced the shipped config, which
  * pointed at `http://localhost:20128/v1` with `apiKeyEnv: GH_API_KEY` - a dead
  * endpoint left by a different tool.
+ *
+ * ## Still missing: the provider is not actually registered
+ *
+ * Verified on device. Writing this section is necessary but NOT sufficient.
+ *
+ * The `web` profile's `package.json` composes exactly two bundles:
+ *
+ *     "bundles": ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"]
+ *
+ * `@deepseek-ai/dsh-llm-deepseek` - the plugin that registers the
+ * `deepseek-official` route - is **not** among them. The selection therefore
+ * names a route that does not exist in the running agent, and chat stays
+ * disabled with send and attachment rendered off.
+ *
+ * Adding the bundle by hand is not a fix either: the profile's `node_modules`
+ * is empty, so the agent stopped booting altogether (HTTP 000) until the
+ * profile was restored. Making this work means bundling the plugin and its
+ * dependency closure into the profile at bootstrap - which is the next piece
+ * of work, and is deliberately not faked here.
  */
 internal object AgentModelSettings {
 
