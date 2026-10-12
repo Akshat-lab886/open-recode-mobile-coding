@@ -1,7 +1,6 @@
 package com.dsh.mobile.runtime
 
 import android.content.Context
-import android.util.Log
 import com.dsh.mobile.data.AgentSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -173,7 +172,6 @@ class AgentInstaller(private val context: Context) {
     }
 
     companion object {
-        private const val TAG = "AgentInstaller"
         const val INSTALL_TIMEOUT_MINUTES = 10L
     }
 }

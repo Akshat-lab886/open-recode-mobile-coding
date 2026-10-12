@@ -205,7 +205,6 @@ object AgentRuntime {
     const val GUEST_AGENTS_DIR = "/agents"
 
     /** Guest path of the unpacked rootfs (this is also the proot `-r` value). */
-    const val GUEST_ROOT = "/"
 
     /**
      * Guest `PATH` for the PRoot child.
@@ -533,17 +532,4 @@ object AgentRuntime {
     }
 
     const val MANIFEST_ASSET = "runtime-assets.json"
-}
-
-/** Best-effort helper to mirror a SAF tree into the loopback workspace mount. */
-fun mirrorSafTreeToWorkspace(context: Context, sourceTree: File, workspace: File) {
-    // SAF URIs are resolved by the ViewModel into an app-private staging dir
-    // before this is called; here we simply ensure the mount point exists and
-    // record the mapping for the gateway's file browser.
-    workspace.mkdirs()
-    try {
-        Os.symlink(sourceTree.absolutePath, File(workspace, ".saf-source").absolutePath)
-    } catch (_: Exception) {
-        // Symlink may already exist — harmless.
-    }
 }

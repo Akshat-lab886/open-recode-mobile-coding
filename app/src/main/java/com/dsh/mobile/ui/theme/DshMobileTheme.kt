@@ -191,7 +191,6 @@ data class DshTokens(
     val spaceMd: androidx.compose.ui.unit.Dp = 12.dp,
     val spaceLg: androidx.compose.ui.unit.Dp = 16.dp,
     val spaceXl: androidx.compose.ui.unit.Dp = 24.dp,
-    val spaceXxl: androidx.compose.ui.unit.Dp = 32.dp,
     /** Widest a readable column may get before it is capped and centred. */
     val contentMaxWidth: androidx.compose.ui.unit.Dp = 640.dp,
     /** Widest a form (keys, workspace) may get — narrower than reading text. */
@@ -205,16 +204,6 @@ data class DshTokens(
 val LocalDshTokens: ProvidableCompositionLocal<DshTokens> =
     staticCompositionLocalOf { DshTokens() }
 
-/** Monospace style for code, paths and logs. */
-val DshCodeStyle: TextStyle
-    @Composable @ReadOnlyComposable
-    get() = TextStyle(
-        fontFamily = FontFamily.Monospace,
-        fontSize = 12.sp,
-        lineHeight = 17.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Start,
-    )
 
 object DshTheme {
     val tokens: DshTokens

@@ -145,12 +145,8 @@ object AgentCatalog {
     )
 
     private val byId: Map<String, AgentSpec> = all.associateBy { it.id }
-    private val byLabel: Map<String, AgentSpec> = all.associateBy { it.label }
 
     fun specFor(id: String): AgentSpec? = byId[id]
-
-    /** True when [id] names a known agent. Used to validate persisted config. */
-    fun isKnown(id: String): Boolean = byId.containsKey(id)
 
     /** Every agent the picker may offer. */
     val installable: List<AgentSpec> = all.filter { it.available }

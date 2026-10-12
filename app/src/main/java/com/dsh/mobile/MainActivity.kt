@@ -16,11 +16,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dsh.mobile.service.AgentRuntimeService
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.collectAsState
 import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.ui.AgentPickerSheet
 import com.dsh.mobile.ui.BootstrapProgressView

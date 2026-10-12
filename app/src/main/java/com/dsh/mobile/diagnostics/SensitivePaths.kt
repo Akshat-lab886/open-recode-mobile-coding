@@ -32,5 +32,4 @@ object SensitivePaths {
     }
 
     /** Convenience for a plain path string (relative paths allowed). */
-    fun isDeniedPath(path: String): Boolean = isDenied(File(path))
 }
