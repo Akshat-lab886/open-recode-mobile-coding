@@ -70,6 +70,9 @@ import java.io.File
  */
 internal object AgentModelSettings {
 
+    /** Top-level settings key that would shadow the agent's own model default. */
+    const val SECTION = "agent-default-model"
+
     /** Provider route registered by the bundled DeepSeek LLM plugin. */
     const val PROVIDER_DEEPSEEK = "deepseek-official"
 
@@ -106,19 +109,40 @@ internal object AgentModelSettings {
         """.trimIndent() + "\n"
 
     /**
-     * Make [settingsFile] select [model], replacing any previous selection.
+     * Remove any user-layer [SECTION] override from [settingsFile].
      *
-     * Returns true when the file changed. The file is only rewritten when the
-     * content actually differs, because the agent watches this path and a
-     * no-op write would look like a configuration change on every boot.
+     * ## Why this deletes rather than writes
+     *
+     * An earlier version of this file wrote an `agent-default-model` section
+     * naming `deepseek-official` / `deepseek-v4-flash`, on the assumption the
+     * agent shipped with no model selected. That assumption was **wrong**, and
+     * the write actively broke chat.
+     *
+     * `@deepseek-ai/dsh-base` already registers the `llm-deepseek` adapter and
+     * ships this default in its own patch layer:
+     *
+     *     - id: agent-default-model
+     *       name: '@deepseek-ai/dsh-agent-default-model'
+     *       config:
+     *         provider: deepseek-official
+     *         model: deepseek-flash
+     *
+     * The user layer replaces a row's whole `config` rather than merging into
+     * it, so our override shadowed that working default. With it present the
+     * web UI rendered send and attachment disabled and showed "Chat and
+     * attachments are off until a model is set"; with it removed the agent
+     * boots and chat is enabled. Verified on device both ways.
+     *
+     * So the correct job here is to make sure no stale user-layer override
+     * survives, and otherwise leave the agent's own defaults alone.
+     *
+     * Returns true when the file changed.
      */
-    fun apply(settingsFile: File, provider: String = PROVIDER_DEEPSEEK, model: String = DEFAULT_MODEL): Boolean {
-        val desired = renderYamlSection(provider, model)
-        val existing = if (settingsFile.isFile) settingsFile.readText() else ""
-        val updated = replaceOrAppendSection(existing, "agent-default-model", desired)
-        if (updated == existing) return false
-        settingsFile.parentFile?.mkdirs()
-        settingsFile.writeText(updated)
+    fun apply(settingsFile: File): Boolean {
+        if (!settingsFile.isFile) return false
+        val existing = settingsFile.readText()
+        if (!existing.lines().any { it.trimEnd() == "$SECTION:" }) return false
+        settingsFile.writeText(replaceOrAppendSection(existing, SECTION, ""))
         return true
     }
 
@@ -139,9 +163,14 @@ internal object AgentModelSettings {
         // The section runs until the next line that starts a new top-level key.
         var end = start + 1
         while (end < lines.size && !isTopLevelKey(lines[end])) end++
-        val replacement = section.trimEnd().lines()
+        // An empty section means "remove it": this is how a stale user-layer
+        // override is deleted so the agent's own default applies again.
+        if (section.isBlank()) {
+            lines.subList(start, end).clear()
+            return lines.joinToString("\n").trimEnd() + "\n"
+        }
         lines.subList(start, end).clear()
-        lines.addAll(start, replacement)
+        lines.addAll(start, section.trimEnd().lines())
         return lines.joinToString("\n").trimEnd() + "\n"
     }
 

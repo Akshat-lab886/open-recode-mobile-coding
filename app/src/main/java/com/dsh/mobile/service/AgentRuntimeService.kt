@@ -240,26 +240,20 @@ private suspend fun isAlreadyServing(): Boolean {
                 AgentRuntime.stageBundledAssets(this@AgentRuntimeService)
                 Log.i(TAG, "boot: assets staged")
 
-                // Point the agent at a real model.
+                // Clear a stale model override, if one survived a previous build.
                 //
-                // The stored API key reaches the agent as an environment
-                // variable, but the agent still has to be told which provider
-                // and model to use. Without this it boots with no usable
-                // provider, renders send and attachment disabled, and the chat
-                // box silently accepts nothing. Only written when a key is
-                // actually stored, so an unconfigured install is left alone.
-                if ((application as DshMobileApp).vault.asEnvironment()
-                        .containsKey("DEEPSEEK_API_KEY")
-                ) {
-                    val settings = java.io.File(
-                        AgentRuntime.runtimeRoot(this@AgentRuntimeService),
-                        ".dsh/settings.yaml",
-                    )
-                    val changed = AgentModelSettings.apply(settings)
-                    Log.i(
-                        TAG,
-                        "boot: agent model settings ${if (changed) "updated" else "already current"}",
-                    )
+                // The agent's own dsh-base bundle already registers the
+                // `llm-deepseek` adapter and ships a working
+                // `agent-default-model` default. A user-layer section of the
+                // same name replaces that row's whole config rather than
+                // merging, so a leftover override shadows the working default
+                // and chat renders disabled. Removing it is what restores chat.
+                val settings = java.io.File(
+                    AgentRuntime.runtimeRoot(this@AgentRuntimeService),
+                    ".dsh/settings.yaml",
+                )
+                if (AgentModelSettings.apply(settings)) {
+                    Log.i(TAG, "boot: removed stale agent-default-model override")
                 }
 
                 // Surface payload gaps up front rather than letting the child

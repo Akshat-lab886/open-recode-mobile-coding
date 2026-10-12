@@ -6,49 +6,39 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The agent boots with no usable provider unless this section is written.
+ * The agent ships its own working model default; our job is to get out of the
+ * way.
  *
- * The shipped settings.yaml pointed at `http://localhost:20128/v1` with
- * `apiKeyEnv: GH_API_KEY` - a dead endpoint from another tool. With that in
- * place DSH renders send and attachment disabled and the chat box accepts
- * nothing, which is indistinguishable from a broken UI.
+ * `@deepseek-ai/dsh-base` registers the `llm-deepseek` adapter and already
+ * configures:
  *
- * The namespace and field names are not guesses: they come from the installed
- * agent's own `@deepseek-ai/dsh-agent-default-model` type definitions, and the
- * provider route from `@deepseek-ai/dsh-llm-deepseek`.
+ *     - id: agent-default-model
+ *       name: '@deepseek-ai/dsh-agent-default-model'
+ *       config: { provider: deepseek-official, model: deepseek-flash }
+ *
+ * A user-layer `agent-default-model` section REPLACES that row's whole config
+ * instead of merging into it. An earlier version of this class wrote exactly
+ * such a section, which shadowed the working default and left chat disabled
+ * with "Chat and attachments are off until a model is set". Verified on device:
+ * with the override the banner shows; without it, chat is enabled.
  */
 class AgentModelSettingsTest {
 
     @Test
-    fun `writes the namespace the agent actually reads`() {
-        val yaml = AgentModelSettings.renderYamlSection(
-            AgentModelSettings.PROVIDER_DEEPSEEK,
-            AgentModelSettings.DEFAULT_MODEL,
-        )
-        assertTrue("namespace must be agent-default-model: $yaml", yaml.contains("agent-default-model:"))
-        assertTrue(yaml.contains("provider: deepseek-official"))
-        assertTrue(yaml.contains("model: deepseek-v4-flash"))
+    fun `a stale override is detected`() {
+        val yaml = """
+            ui-theme:
+              preference: dark
+            agent-default-model:
+              provider: deepseek-official
+              model: deepseek-v4-flash
+        """.trimIndent() + "\n"
+        assertTrue(yaml.lines().any { it.trimEnd() == "agent-default-model:" })
     }
 
     @Test
-    fun `appends to a file that has no such section`() {
-        val out = AgentModelSettings.replaceOrAppendSection(
-            "ui-theme:\n  preference: dark\n",
-            "agent-default-model",
-            AgentModelSettings.renderYamlSection(
-                AgentModelSettings.PROVIDER_DEEPSEEK,
-                AgentModelSettings.DEFAULT_MODEL,
-            ),
-        )
-        assertTrue(out.contains("ui-theme:"))
-        assertTrue(out.contains("agent-default-model:"))
-        assertTrue(out.contains("deepseek-v4-flash"))
-    }
-
-    @Test
-    fun `replaces a previous selection without duplicating the key`() {
-        val out = AgentModelSettings.replaceOrAppendSection(
-            """
+    fun `removing the override leaves the agent's other settings alone`() {
+        val yaml = """
             ui-theme:
               preference: dark
             agent-default-model:
@@ -58,66 +48,69 @@ class AgentModelSettingsTest {
               providers:
                 gh:
                   baseURL: http://localhost:20128/v1
-            """.trimIndent() + "\n",
-            "agent-default-model",
-            AgentModelSettings.renderYamlSection(
-                AgentModelSettings.PROVIDER_DEEPSEEK,
-                "deepseek-v4-pro",
-            ),
-        )
-        assertEquals("the key must appear exactly once", 1, Regex("agent-default-model:").findAll(out).count())
-        assertTrue(out.contains("model: deepseek-v4-pro"))
-        assertFalse("the stale value must be gone", out.contains("model: deepseek-v4-flash\n"))
-    }
-
-    @Test
-    fun `replacing one section leaves the agents other keys alone`() {
+        """.trimIndent() + "\n"
         val out = AgentModelSettings.replaceOrAppendSection(
-            "ui-theme:\n  preference: dark\nagent-presets:\n  default: ptc\n",
-            "agent-default-model",
-            AgentModelSettings.renderYamlSection(
-                AgentModelSettings.PROVIDER_DEEPSEEK,
-                AgentModelSettings.DEFAULT_MODEL,
-            ),
+            yaml,
+            AgentModelSettings.SECTION,
+            "",
         )
-        // Reformatting the agent's own settings as a side effect of setting a
-        // model is exactly the kind of surprise that loses a user's config.
+        assertFalse("the override must be gone", out.contains("agent-default-model:"))
+        assertFalse(out.contains("deepseek-v4-flash"))
+        // Everything the agent owns has to survive: this class only ever removes
+        // its own section.
         assertTrue(out.contains("ui-theme:"))
         assertTrue(out.contains("preference: dark"))
-        assertTrue(out.contains("agent-presets:"))
-        assertTrue(out.contains("default: ptc"))
+        assertTrue(out.contains("llm-pi-ai:"))
+        assertTrue(out.contains("localhost:20128"))
     }
 
     @Test
-    fun `handles an empty settings file`() {
-        val out = AgentModelSettings.replaceOrAppendSection(
-            "",
-            "agent-default-model",
-            AgentModelSettings.renderYamlSection(
-                AgentModelSettings.PROVIDER_DEEPSEEK,
-                AgentModelSettings.DEFAULT_MODEL,
-            ),
+    fun `removing an absent section is a no-op`() {
+        val yaml = "ui-theme:\n  preference: dark\n"
+        assertEquals(
+            yaml,
+            AgentModelSettings.replaceOrAppendSection(yaml, AgentModelSettings.SECTION, ""),
         )
-        assertTrue(out.contains("agent-default-model:"))
     }
 
     @Test
-    fun `writing the same selection twice is a no-op`() {
-        val section = AgentModelSettings.renderYamlSection(
-            AgentModelSettings.PROVIDER_DEEPSEEK,
-            AgentModelSettings.DEFAULT_MODEL,
+    fun `apply does nothing when the file is absent`() {
+        val missing = java.io.File(
+            System.getProperty("java.io.tmpdir"),
+            "dsh-absent-${System.nanoTime()}.yaml",
         )
-        val first = AgentModelSettings.replaceOrAppendSection("", "agent-default-model", section)
-        val second = AgentModelSettings.replaceOrAppendSection(first, "agent-default-model", section)
-        assertEquals("an unchanged file must not be rewritten on every boot", first, second)
+        assertFalse(AgentModelSettings.apply(missing))
+        assertFalse(missing.exists())
     }
 
     @Test
-    fun `every advertised model is one the adapter really registers`() {
-        // Guards against shipping a model id that does not exist: the ids were
-        // read out of the installed plugin rather than invented.
-        listOf("deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp", "deepseek-flash")
-            .forEach { assertTrue("$it missing", AgentModelSettings.KNOWN_MODELS.contains(it)) }
-        assertTrue(AgentModelSettings.DEFAULT_MODEL in AgentModelSettings.KNOWN_MODELS)
+    fun `apply removes an override and reports the change`() {
+        val f = java.io.File.createTempFile("dsh-settings", ".yaml")
+        try {
+            f.writeText(
+                "ui-theme:\n  preference: dark\nagent-default-model:\n" +
+                    "  provider: deepseek-official\n  model: deepseek-v4-flash\n",
+            )
+            assertTrue("apply must report that it changed the file", AgentModelSettings.apply(f))
+            val after = f.readText()
+            assertFalse(after.contains("agent-default-model:"))
+            assertTrue(after.contains("preference: dark"))
+            // Idempotent: a second boot must not keep rewriting the file.
+            assertFalse(AgentModelSettings.apply(f))
+        } finally {
+            f.delete()
+        }
+    }
+
+    @Test
+    fun `apply is a no-op on a clean config`() {
+        val f = java.io.File.createTempFile("dsh-clean", ".yaml")
+        try {
+            f.writeText("ui-theme:\n  preference: dark\n")
+            assertFalse(AgentModelSettings.apply(f))
+            assertTrue(f.readText().contains("preference: dark"))
+        } finally {
+            f.delete()
+        }
     }
 }
