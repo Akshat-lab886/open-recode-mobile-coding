@@ -16,6 +16,7 @@ import com.dsh.mobile.bootstrap.BootstrapManager
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.RuntimeConfig
 import com.dsh.mobile.proxy.VisualGateway
+import com.dsh.mobile.runtime.AgentModelSettings
 import com.dsh.mobile.runtime.AgentRuntime
 import com.dsh.mobile.runtime.RuntimePayloadState
 import com.dsh.mobile.ui.AgentServiceStatusFlow
@@ -238,6 +239,28 @@ private suspend fun isAlreadyServing(): Boolean {
                 Log.i(TAG, "boot: staging bundled assets")
                 AgentRuntime.stageBundledAssets(this@AgentRuntimeService)
                 Log.i(TAG, "boot: assets staged")
+
+                // Point the agent at a real model.
+                //
+                // The stored API key reaches the agent as an environment
+                // variable, but the agent still has to be told which provider
+                // and model to use. Without this it boots with no usable
+                // provider, renders send and attachment disabled, and the chat
+                // box silently accepts nothing. Only written when a key is
+                // actually stored, so an unconfigured install is left alone.
+                if ((application as DshMobileApp).vault.asEnvironment()
+                        .containsKey("DEEPSEEK_API_KEY")
+                ) {
+                    val settings = java.io.File(
+                        AgentRuntime.runtimeRoot(this@AgentRuntimeService),
+                        ".dsh/settings.yaml",
+                    )
+                    val changed = AgentModelSettings.apply(settings)
+                    Log.i(
+                        TAG,
+                        "boot: agent model settings ${if (changed) "updated" else "already current"}",
+                    )
+                }
 
                 // Surface payload gaps up front rather than letting the child
                 // die with an opaque "no such file" deep in the boot.
