@@ -145,53 +145,51 @@ object AgentCatalog {
         AgentSpec(
             id = "hermes",
             label = "Hermes Agent",
-            // NOT an npm package. The npm name is a third-party bridge that then
-            // downloads the real runtime, so npm is the wrong mechanism here.
+            // VERIFIED: `hermes-agent` on npm is a third-party bridge ("Unofficial
+            // npm bridge for Hermes Agent") that then fetches the real runtime.
+            // The real thing provisions Python 3.14 plus pinned Node, ripgrep,
+            // FFmpeg and Chromium - a 1-3 GB payload that will not fit beside the
+            // other agents on a phone with a few GB free. Listed so the gap is
+            // visible and the reason is on record, not silently dropped.
             install = InstallKind.NPM("hermes-agent"),
             npmPackage = "hermes-agent",
-            // VERIFIED: Hermes provisions its own Python 3.14 plus pinned
-            // Node, ripgrep, FFmpeg and (by default) a Chromium download for
-            // computer use. That is a 1-3 GB footprint, not a 90 MB CLI - and
-            // it does not fit alongside the agents on a phone with a few GB
-            // free. The picker shows this number so the cost is visible before
-            // the user commits to it.
-            approxInstallBytes = 1536L * 1024 * 1024,
+            approxInstallBytes = 1_500L * 1024 * 1024,
             defaultPort = 3094,
             relativeBinary = "hermes-agent/bin/hermes-agent",
             needsGateway = true,
             gatewayBackend = "hermes",
+            // Its flags depend on which backends it has provisioned; not checked.
             argvVerified = false,
-            // VERIFIED on npm: hermes-agent@0.21.6 is described by its own
-            // author as "Unofficial npm bridge for Hermes Agent"; upstream
-            // marks pip/uv/brew as unsupported. It is also a general agent
-            // that delegates to Claude Code/Codex rather than a direct peer.
-            provenanceNote = "Unofficial npm bridge, not a Nous Research package. " +
-                "Large (1-3 GB) and delegates coding to other agents.",
+            provenanceNote = "Unofficial npm bridge for Hermes, 1-3 GB once the " +
+                "Python/Node/Chromium payload lands. Needs roughly 1.5 GB free.",
         ),
         AgentSpec(
             id = "antigravity",
             label = "Antigravity CLI",
-            // VERIFIED by downloading and inspecting the binary, not by
-            // reading docs:
+            // VERIFIED by downloading and inspecting the binary:
             //
-            // Antigravity CLI ships a NATIVE Android ARM64 build - ELF64
-            // AArch64 PIE, PT_INTERP=/system/bin/linker64, linked against
-            // Bionic, with no glibc or musl dependencies. That is the build
-            // this app wants, because the agent already runs natively inside
-            // the app sandbox (no proot). The GitHub release assets are all
-            // glibc-linked and would need a compat layer to execute here.
+            // The npm package `antigravity` is version 0.0.0 and describes
+            // itself as "placeholder for the haters", with a `kirox` binary. It
+            // is NOT Google's product, so installing it by name would put a
+            // fake agent on the user's device.
             //
-            // The binary inside the archive is named `antigravity`, not `agy`;
-            // `agy` is the command you type.
+            // Google ships Antigravity CLI as a Go binary, and provides a
+            // NATIVE Android ARM64 build: ELF64 AArch64 PIE,
+            // PT_INTERP=/system/bin/linker64, linked against Bionic, with no
+            // glibc or musl dependency. That is the build this app uses,
+            // because the agent already runs natively in the app sandbox with
+            // no proot - the glibc-linked GitHub assets could not execute here.
+            //
+            // The executable inside the archive is named `antigravity`; `agy`
+            // is the command you type.
             install = InstallKind.Tarball(
                 urlTemplate = "https://storage.googleapis.com/antigravity-public/" +
                     "antigravity-cli/1.3.3-5524738307653632/android-arm/cli_android_{{arch}}.tar.gz",
                 binaryInArchive = "antigravity",
             ),
-            // Display string only. This is NOT an npm package - the npm name
-            // `antigravity` is an unrelated placeholder whose bin is `kirox`.
+            // Display string only - this is NOT an npm package.
             npmPackage = "Native Android ARM64 build (Google CDN)",
-            // 51.6 MiB compressed, ~168 MiB unpacked. The cost column shows
+            // 51.6 MiB compressed, ~168 MiB unpacked. The cost column reports
             // what the user's storage actually gives up, not the download size.
             approxInstallBytes = 176L * 1024 * 1024,
             defaultPort = 3095,
@@ -199,9 +197,9 @@ object AgentCatalog {
             needsGateway = true,
             gatewayBackend = "antigravity",
             argvVerified = false,
-            provenanceNote = "Closed source (Google), ships an official native Android " +
-                "build, but Android is not in Google's documented support list. " +
-                "Needs a model configured in its own settings before it will run.",
+            provenanceNote = "Closed source (Google). Uses Google's official native " +
+                "Android binary; the npm name 'antigravity' is an unrelated " +
+                "placeholder and is deliberately not installed.",
         ),
     )
 
