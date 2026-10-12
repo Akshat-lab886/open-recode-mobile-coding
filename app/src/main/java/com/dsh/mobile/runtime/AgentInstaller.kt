@@ -51,6 +51,14 @@ class AgentInstaller(private val context: Context) {
         when (val kind = spec.install) {
             is com.dsh.mobile.data.InstallKind.Tarball -> installTarball(spec, kind)
             is com.dsh.mobile.data.InstallKind.NPM -> installViaNpm(spec, kind.packageName)
+            // Reached only if the caller ignores `available`. Failing loudly is
+            // better than starting a download that cannot succeed on a phone.
+            is com.dsh.mobile.data.InstallKind.Unsupported -> Result(
+                spec = spec,
+                installed = false,
+                output = "",
+                failure = kind.reason,
+            )
         }
     }
 

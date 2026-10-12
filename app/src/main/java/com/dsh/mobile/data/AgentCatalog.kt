@@ -12,6 +12,15 @@ sealed interface InstallKind {
         /** Path of the executable inside the unpacked tarball. */
         val binaryInArchive: String,
     ) : InstallKind
+
+    /**
+     * Known agent, deliberately not offered on this device.
+     *
+     * Exists so an unsupported agent can stay in the catalogue - with its reason
+     * on record - instead of vanishing. The picker shows the reason rather than
+     * offering an install that cannot finish.
+     */
+    data class Unsupported(val reason: String) : InstallKind
 }
 
 /**
@@ -80,7 +89,15 @@ data class AgentSpec(
     val provenanceNote: String = "",
 ) {
     /** True when the agent may be offered to the user at all. */
-    val available: Boolean get() = npmPackage.isNotBlank()
+    /**
+     * True when the agent may be offered to the user.
+     *
+     * Driven by the install kind, not by whether an npm name exists: an
+     * [InstallKind.Unsupported] agent still carries a package string for
+     * provenance, and keying off that would put it straight back into the
+     * install list.
+     */
+    val available: Boolean get() = install !is InstallKind.Unsupported
 }
 
 /**
@@ -145,23 +162,33 @@ object AgentCatalog {
         AgentSpec(
             id = "hermes",
             label = "Hermes Agent",
-            // VERIFIED: `hermes-agent` on npm is a third-party bridge ("Unofficial
-            // npm bridge for Hermes Agent") that then fetches the real runtime.
-            // The real thing provisions Python 3.14 plus pinned Node, ripgrep,
-            // FFmpeg and Chromium - a 1-3 GB payload that will not fit beside the
-            // other agents on a phone with a few GB free. Listed so the gap is
-            // visible and the reason is on record, not silently dropped.
-            install = InstallKind.NPM("hermes-agent"),
-            npmPackage = "hermes-agent",
-            approxInstallBytes = 1_500L * 1024 * 1024,
+            // NOT installable here, and saying so is more useful than a button
+            // that fails. Two independent reasons, both measured rather than
+            // assumed:
+            //
+            //  1. Size. `hermes-agent` on npm is a 105 KB third-party bridge
+            //     ("Unofficial npm bridge for Hermes Agent") that then downloads
+            //     the real payload: Python 3.14 plus pinned Node, ripgrep,
+            //     FFmpeg and Chromium - a 1-3 GB install. The test device has
+            //     about 3 GB free, and the Android 17 memory limiter leaves
+            //     roughly 1 GB for an agent process on a 4 GB phone.
+            //  2. It is not a coding agent. Hermes is a general assistant that
+            //     delegates coding to Claude Code / Codex / OpenCode, so it would
+            //     duplicate an agent the user can already install directly.
+            install = InstallKind.Unsupported(
+                "Hermes is a 1-3 GB Python runtime (not a CLI), and it delegates " +
+                    "coding to Claude Code/Codex/OpenCode, which are already " +
+                    "available here directly.",
+            ),
+            npmPackage = "hermes-agent (unofficial bridge)",
+            approxInstallBytes = 2L * 1024 * 1024 * 1024,
             defaultPort = 3094,
             relativeBinary = "hermes-agent/bin/hermes-agent",
             needsGateway = true,
             gatewayBackend = "hermes",
-            // Its flags depend on which backends it has provisioned; not checked.
             argvVerified = false,
-            provenanceNote = "Unofficial npm bridge for Hermes, 1-3 GB once the " +
-                "Python/Node/Chromium payload lands. Needs roughly 1.5 GB free.",
+            provenanceNote = "Unofficial npm bridge, not a Nous Research package. " +
+                "Not offered: 1-3 GB runtime on a phone with limited storage.",
         ),
         AgentSpec(
             id = "antigravity",

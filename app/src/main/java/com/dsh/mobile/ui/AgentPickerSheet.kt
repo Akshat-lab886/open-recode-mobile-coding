@@ -15,6 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +64,12 @@ fun AgentPickerSheet(
 
     Column(
         modifier = modifier
+            // ModalBottomSheet measures its content with UNBOUNDED height, and
+            // Compose refuses to measure a verticalScroll against an infinite
+            // maximum - it throws and the process dies. This sheet is shown at
+            // first launch, so the crash took the app down before the user saw
+            // anything. An explicit cap is safe in both hosts.
+            .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.92f).dp)
             .verticalScroll(rememberScrollState())
             .padding(horizontal = tokens.spaceLg),
         verticalArrangement = Arrangement.spacedBy(tokens.spaceSm),

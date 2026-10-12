@@ -32,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -71,6 +72,10 @@ fun BootstrapProgressView(
             Column(
                 Modifier
                     .fillMaxWidth()
+                    // Same rule as the other sheets: a ModalBottomSheet measures
+                    // its content with unbounded height, and Compose throws when
+                    // a verticalScroll is measured against an infinite maximum.
+                    .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.92f).dp)
                     // A tablet has room for a wider column, and the log
                     // pane beside a 520dp form is cramped next to it.
                     .widthIn(

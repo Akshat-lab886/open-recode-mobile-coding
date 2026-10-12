@@ -4,6 +4,7 @@ import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentCatalog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -101,14 +102,49 @@ class AgentCatalogContractTest {
      */
     @Test
     fun `unofficial packages carry a provenance note`() {
-        val unofficial = AgentCatalog.all.filter { it.npmPackage == "antigravity" || it.npmPackage == "hermes-agent" }
-        assertTrue("expected the unofficial packages to still be listed", unofficial.isNotEmpty())
+        // Selected by the note itself rather than by npm name: the npm name is
+        // exactly what gets qualified when a package turns out to be a bridge.
+        val unofficial = AgentCatalog.all.filter {
+            it.provenanceNote.contains("Unofficial", ignoreCase = true)
+        }
+        assertTrue("expected the unofficial agents to still be listed", unofficial.isNotEmpty())
         unofficial.forEach {
             assertTrue(
-                "${it.npmPackage} must carry a provenance note explaining it is unofficial",
+                "${it.id} must keep an explanatory provenance note",
                 it.provenanceNote.isNotBlank(),
             )
         }
+    }
+
+    /**
+     * An agent that cannot actually work on this class of device must not be
+     * offered as installable.
+     *
+     * Hermes is the case in point: the npm package is an unofficial 105 KB
+     * bridge that then downloads a 1-3 GB Python runtime. Offering it produced a
+     * button that starts a large download and then fails on a phone with a few
+     * GB free. It stays in the catalogue with the reason recorded, but it is
+     * excluded from the install list.
+     */
+    @Test
+    fun `unsupported agents are excluded from the install list`() {
+        val hermes = AgentCatalog.specFor("hermes")!!
+        assertTrue(
+            "Hermes must be marked unsupported rather than offered",
+            hermes.install is com.dsh.mobile.data.InstallKind.Unsupported,
+        )
+        assertTrue(
+            "the reason must be recorded, not silently dropped",
+            (hermes.install as com.dsh.mobile.data.InstallKind.Unsupported).reason.isNotBlank(),
+        )
+        assertFalse(
+            "Hermes must not appear in the installable list",
+            AgentCatalog.installable.any { it.id == "hermes" },
+        )
+        assertTrue(
+            "it must still be present in the catalogue for provenance",
+            AgentCatalog.all.any { it.id == "hermes" },
+        )
     }
 
     @Test

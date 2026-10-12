@@ -61,6 +61,17 @@ class AgentRuntimeService : LifecycleService() {
     private var bootJob: Job? = null
     private var child: Process? = null
 
+    /**
+     * Capacity bookkeeping for concurrent agent sessions.
+     *
+     * The registry owns the *decision* - how many agents this device can afford
+     * and which loopback port each one gets - while this service owns the
+     * processes. Keeping the arithmetic out of the service is what makes the
+     * awkward cases (a memory-starved phone, an occupied port, an exhausted
+     * range) testable on the JVM instead of only on hardware.
+     */
+    private val sessions = com.dsh.mobile.runtime.AgentSessionRegistry()
+
     /** Epoch ms when the current agent went Running; 0 when nothing is running. */
     private var startedAt: Long = 0L
     private var gateway: VisualGateway? = null
@@ -191,6 +202,9 @@ private suspend fun isAlreadyServing(): Boolean {
         // pre-empt the running boot/watchdog job — never be dropped by it.
         bootJob?.cancel()
         stopChildLocked()
+        // Releasing the slot here means a restart frees its port, so a failed
+        // boot cannot leak capacity and silently block the next agent.
+        sessions.stopAll()
         bootJob = lifecycleScope.launch {
             // 0. First-boot gate: the agent binaries only exist after the
             // bootstrap script finishes. Block here (with visible progress in
@@ -320,6 +334,38 @@ private suspend fun isAlreadyServing(): Boolean {
                 // thing that authenticates — the bare origin answers 401.
                 val launchUrl = AtomicReference<String?>(null)
                 val logFile = AgentRuntime.logFile(this@AgentRuntimeService, agent)
+
+                // Capacity gate. Refusing is the correct outcome when the
+                // device cannot afford another agent: Android 17 enforces a
+                // cgroup budget that cannot be queried at runtime, and
+                // over-committing gets a process killed - taking the user's
+                // in-flight session with it.
+                val allowed = com.dsh.mobile.runtime.DeviceCapacity
+                    .inspect(this@AgentRuntimeService).maxConcurrent
+                val session = sessions.start(
+                    id = agent.id,
+                    agentId = agent.id,
+                    workspace = config.workspacePath,
+                    allowed = allowed,
+                    // The configured port is already claimed by this boot, so
+                    // the registry must not hand it out a second time.
+                    isPortFree = { candidate -> candidate != port },
+                ).getOrElse { refusal ->
+                    val reason = (refusal as? com.dsh.mobile.runtime.AgentSessionRegistry.SessionRefusal)
+                        ?.reason
+                    Log.w(TAG, "refusing to start a second agent: $reason")
+                    setStatus(
+                        ServiceStatus.Error(
+                            "This device can only run $allowed agent at a time. " +
+                                "Stop the running agent first.",
+                            // Not retryable on its own: retrying immediately
+                            // would fail the same way until the user acts.
+                            retryable = false,
+                        ),
+                    )
+                    return@launch
+                }
+                Log.i(TAG, "session ${session.id} reserved on port ${session.port}")
 
                 val process = withContext(Dispatchers.IO) {
                     ProcessBuilder(command)
