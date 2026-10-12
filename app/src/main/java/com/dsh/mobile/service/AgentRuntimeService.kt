@@ -283,50 +283,28 @@ private suspend fun isAlreadyServing(): Boolean {
                     return@launch
                 }
 
-                // Install the runtime payload when it is not already present.
+                // Unpack the bundled npm CLI.
                 //
-                // This is what makes ANY optional agent installable. The app
+                // This is what makes any optional agent installable. The APK
                 // ships only the DeepSeek tarball, so DSH runs on the APK's own
-                // bionic Node - which is the sole reason "only DSH works". npm,
-                // git and rg live inside the Alpine rootfs that PRoot unpacks,
-                // and without them `npm install` cannot run at all:
+                // bionic Node - which is the entire reason "only DSH works".
+                // npm, git and rg live inside an Alpine rootfs that PRoot would
+                // unpack, but that rootfs was never published to any release
+                // (the manifest URL 404s), so there was no guest npm to run and
+                // `npm install` failed for every agent:
                 //   Error: Cannot find module '.../lib/arm64/node_modules/npm/bin/npm-cli.js'
                 //
-                // The downloader and the manifest parser already existed but had
-                // no callers, so the payload was simply never fetched.
-                if (payload !is RuntimePayloadState.Complete) {
-                    val manifest = AgentRuntime.loadManifest(this@AgentRuntimeService)
-                    if (manifest != null) {
-                        setStatus(ServiceStatus.Booting("Installing the Linux runtime\u2026"))
-                        val result = com.dsh.mobile.runtime.RuntimeAssetDownloader(
-                            assets = AgentRuntime.runtimeAssets(this@AgentRuntimeService),
-                            onProgress = { st ->
-                                if (st is RuntimePayloadState.Downloading && st.totalBytes > 0) {
-                                    val pct = st.bytesSoFar * 100 / st.totalBytes
-                                    setStatus(
-                                        ServiceStatus.Booting(
-                                            "Installing the Linux runtime\u2026 " +
-                                                "${st.completed + 1}/${st.total} ($pct%)",
-                                        ),
-                                    )
-                                }
-                            },
-                        ).install(manifest)
-                        Log.i(TAG, "boot: payload install -> $result")
-                        if (result !is RuntimePayloadState.Complete) {
-                            setStatus(
-                                ServiceStatus.Error(
-                                    message = "Could not download the Linux runtime, so " +
-                                        "additional coding agents cannot be installed.\n\n" +
-                                        "DeepSeek Harness still works. Check the connection " +
-                                        "and tap Retry.",
-                                    retryable = true,
-                                ),
-                            )
-                            return@launch
-                        }
+                // npm is pure JavaScript, so bundling the CLI itself (3 MB)
+                // replaces a 46 MB rootfs plus PRoot and works on the same
+                // interpreter that already runs the agent.
+                val npmReady = AgentRuntime.runtimeAssets(this@AgentRuntimeService).stageNpm { rel ->
+                    try {
+                        assets.open(rel)
+                    } catch (_: Exception) {
+                        null
                     }
                 }
+                Log.i(TAG, "boot: bundled npm ready = $npmReady")
 
                 val config = app.configStore.snapshot()
                 val agentsHome = AgentRuntime.agentsDir(this@AgentRuntimeService)

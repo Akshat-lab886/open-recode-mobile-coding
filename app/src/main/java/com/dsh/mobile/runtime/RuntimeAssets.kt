@@ -150,6 +150,94 @@ class RuntimeAssets(private val root: File) {
      * Reads via a stream provider rather than [File] because the source lives
      * in the APK's asset store, not the filesystem.
      */
+    /**
+     * Unpack the bundled npm CLI into [root]/npm.
+     *
+     * npm is pure JavaScript, so it runs on the APK's own bionic Node - the
+     * same interpreter that already runs DeepSeek Harness successfully. That
+     * makes it far cheaper than a 46 MB Alpine rootfs plus PRoot, and it is the
+     * only thing that lets `npm install` work at all: the shipped
+     * dsh-agent.tar.gz contains no npm, and no runtime payload is available.
+     *
+     * Returns true when npm is present afterwards.
+     */
+    fun stageNpm(openSource: (String) -> java.io.InputStream?): Boolean {
+        val target = File(root, "npm")
+        val cli = File(target, "bin/npm-cli.js")
+        if (cli.isFile) return true
+        val stream = openSource(NPM_ARCHIVE) ?: return false
+        return try {
+            target.mkdirs()
+            stream.use { input ->
+                java.util.zip.GZIPInputStream(input).use { gz ->
+                    // Hand-rolled tar: commons-compress is not on the
+                    // classpath and android.util.zip has no TAR reader. Same
+                    // format the installer already parses - a 512-byte header
+                    // per entry, name in 0..100, octal size at 124..136, type
+                    // flag at 156, payload padded to the next 512 boundary.
+                    val header = ByteArray(512)
+                    while (true) {
+                        if (!readFully(gz, header)) break
+                        if (header.all { it == 0.toByte() }) continue
+                        val name = String(header, 0, 100, Charsets.UTF_8)
+                            .trimEnd('\u0000', ' ')
+                        val size = String(header, 124, 12, Charsets.UTF_8)
+                            .trimEnd('\u0000', ' ')
+                            .toLongOrNull(8) ?: 0L
+                        val typeFlag = header[156].toInt().toChar()
+                        // npm's tarball prefixes every entry with "package/".
+                        val rel = name.removePrefix("package/")
+                        if (rel.isNotEmpty() && !rel.startsWith("/") && !rel.contains("..")) {
+                            val out = File(target, rel)
+                            if (typeFlag == '5') {
+                                out.mkdirs()
+                                skipFully(gz, size)
+                            } else {
+                                out.parentFile?.mkdirs()
+                                val payload = ByteArray(size.toInt())
+                                readFully(gz, payload)
+                                out.outputStream().use { it.write(payload) }
+                            }
+                        } else {
+                            skipFully(gz, size)
+                        }
+                        val pad = (512 - (size % 512)) % 512
+                        if (pad > 0) skipFully(gz, pad)
+                    }
+                }
+            }
+            cli.isFile
+        } catch (_: Exception) {
+            // Deliberately swallowed: the caller surfaces the real reason. If
+            // npm is missing the installer fails, and npm's own error message
+            // explains far more than whatever went wrong during an unpack.
+            false
+        }
+    }
+
+    private fun readFully(inp: java.io.InputStream, buf: ByteArray): Boolean {
+        var read = 0
+        while (read < buf.size) {
+            val n = inp.read(buf, read, buf.size - read)
+            if (n <= 0) return false
+            read += n
+        }
+        return true
+    }
+
+    private fun skipFully(inp: java.io.InputStream, count: Long) {
+        var left = count
+        while (left > 0) {
+            val n = inp.skip(left)
+            if (n <= 0) {
+                if (inp.read() < 0) return
+                left--
+            } else {
+                left -= n
+            }
+        }
+    }
+
     fun stageBundledAssets(openSource: (String) -> java.io.InputStream?, assetSink: (String) -> File) {
         val bundled = listOf("visual-gateway/gateway.js", "visual-gateway/ui.html")
         for (rel in bundled) {
@@ -171,6 +259,16 @@ class RuntimeAssets(private val root: File) {
     }
 
     companion object {
+        /**
+         * Name of the npm CLI archive bundled in the APK's assets.
+         *
+         * Deliberately NOT ".tar.gz": aapt2 strips a trailing ".gz" from
+         * asset names, so the file packaged as `assets/npm-cli.tar` and
+         *  returned null at runtime - a silent
+         * unpack failure that looked like a missing dependency.
+         */
+        const val NPM_ARCHIVE = "npm-cli.tgz"
+
         fun sha256(file: File): String {
             val digest = MessageDigest.getInstance("SHA-256")
             file.inputStream().use { input ->

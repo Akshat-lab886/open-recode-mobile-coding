@@ -184,48 +184,32 @@ class AgentInstaller(private val context: Context) {
         // the install fails on permissions rather than on the network.
         val log = StringBuilder()
 
-        // npm does NOT ship in the APK.
+        // npm is pure JavaScript and ships inside the APK as npm-cli.tar.gz,
+        // unpacked to <runtime>/npm by RuntimeAssets.stageNpm. It therefore runs
+        // on the same bionic libnode.so that already runs DeepSeek Harness.
         //
-        // Running it with the bundled bionic libnode.so produced:
-        //   Error: Cannot find module '.../lib/arm64/node_modules/npm/bin/npm-cli.js'
-        // because there is no npm next to the interpreter - npm, git, rg, bash
-        // and python all live inside the Alpine rootfs that PRoot unpacks. The
-        // guest npm is what the bootstrap script already uses (see
-        // `run_in_rootfs /usr/bin/env ... /usr/bin/npm install -g`), and it is
-        // the only npm that actually exists on this device.
-        val runtimeRoot = AgentRuntime.runtimeRoot(context)
-        val proot = File(runtimeRoot, "proot")
+        // Neither of the previous attempts worked here:
+        //   1. bundling npm beside libnode.so:
+        //      Error: Cannot find module '.../lib/arm64/node_modules/npm/bin/npm-cli.js'
+        //   2. reaching for the guest npm under PRoot: proot is not installed,
+        //      because the 46 MB Alpine rootfs was never published, so there
+        //      was no guest npm to run.
+        val npmCli = File(AgentRuntime.runtimeRoot(context), "npm/bin/npm-cli.js")
+        if (!npmCli.isFile) {
+            return@withContext Result(
+                spec,
+                installed = false,
+                failure = "The npm CLI is missing from the runtime. Reinstall the app.",
+            )
+        }
         val npmHome = File(context.filesDir, "npm-home").apply { mkdirs() }
         val npmCache = File(context.filesDir, "npm-cache").apply { mkdirs() }
-        val prootTmp = File(runtimeRoot, "tmp").apply { mkdirs() }
 
-        // Prefer the guest npm under PRoot; fall back to the bundled interpreter
-        // only when PRoot is unavailable, so the reason stays visible in the log.
-        val useProot = proot.canExecute()
-        if (!useProot) {
-            android.util.Log.w(
-                "AgentInstaller",
-                "proot not executable at ${proot.absolutePath}; npm install cannot run",
-            )
-        }
-
-        val command = if (useProot) {
-            listOf(
-                proot.absolutePath,
-                "-r", runtimeRoot.absolutePath,
-                "-b", "/proc", "-b", "/dev", "-b", "/sys",
-                "-w", "/",
-                "/usr/bin/env",
-                "PATH=/usr/local/bin:/usr/bin:/bin:/sbin:/root/bin",
-                "HOME=/root",
-                "TMPDIR=/tmp",
-                "npm_config_cache=$npmCache",
-                "NPM_CONFIG_PREFIX=$dir",
-                "/usr/bin/npm", "install", "-g", pkg,
-            )
-        } else {
-            listOf(node.absolutePath, npmCliPath(node).absolutePath, "install", "-g", pkg)
-        }
+        val command = listOf(
+            node.absolutePath,
+            npmCli.absolutePath,
+            "install", "-g", pkg,
+        )
 
         val proc = try {
             ProcessBuilder(command).apply {
@@ -245,7 +229,6 @@ class AgentInstaller(private val context: Context) {
                 environment()["LD_LIBRARY_PATH"] = "${native.libsDir}:${native.nativeLibDir}"
                 environment()["OPENSSL_CONF"] = native.opensslConf
                 environment()["TMPDIR"] = native.scratchDir
-                environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
                 // Alpine is musl; without this PRoot aborts with
                 // "can't create temporary file: Permission denied".
                 environment()["PROOT_NO_SECCOMP"] = "1"

@@ -191,8 +191,17 @@ object AgentRuntime {
         port: Int,
     ): List<String> {
         val prootFile = File(runtimeRoot(context).absolutePath + "/proot")
-        // If the proot binary hasn't been extracted yet, run natively.
-        if (!prootFile.canExecute()) return buildArgv(agent, context, port)
+        // PRoot is only usable together with the Alpine rootfs it unpacks.
+        //
+        // Checking the binary alone was not enough: proot downloads
+        // independently of the rootfs, so a device could hold a perfectly
+        // executable proot and no rootfs. Every agent launch then died with
+        // "Agent did not open 127.0.0.1:3081 in time" because the guest root
+        // had nothing in it. The agent ships pre-installed and runs fine on the
+        // APK's own bionic Node, so falling back natively is both correct and
+        // the only thing that works until a rootfs actually exists.
+        val rootfs = File(runtimeRoot(context).absolutePath + "/rootfs")
+        if (!prootFile.canExecute() || !rootfs.exists()) return buildArgv(agent, context, port)
 
         // CRITICAL: inside PRoot the guest root IS the runtime root, so argv
         // must use guest paths. Passing host paths such as
