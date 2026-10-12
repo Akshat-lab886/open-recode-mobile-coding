@@ -1,5 +1,8 @@
 package com.dsh.mobile
 
+import android.util.Log
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,9 +10,19 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dsh.mobile.service.AgentRuntimeService
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.collectAsState
+import com.dsh.mobile.data.AgentCatalog
+import com.dsh.mobile.ui.AgentPickerSheet
 import com.dsh.mobile.ui.BootstrapProgressView
 import com.dsh.mobile.ui.CommandDispatcher
 import com.dsh.mobile.ui.ControlCenterViewModel
@@ -42,6 +55,9 @@ class MainActivity : ComponentActivity() {
      */
     private var agentBootRequested = false
 
+    // ModalBottomSheet is still experimental in Material3 1.3.1, so the opt-in
+    // is scoped to this one composable entry point rather than the class.
+    @androidx.compose.material3.ExperimentalMaterial3Api
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -68,6 +84,51 @@ class MainActivity : ComponentActivity() {
                 )
                 val uiState by vm.uiState.collectAsState()
                 val boot by app.bootstrap.state.collectAsState()
+
+                // The agent picker is shown once, after the environment exists,
+                // and only until the user answers it. Both facts are persisted
+                // by AgentInstallStore, so reopening the app never re-asks and
+                // never re-installs.
+                val hasSelected by app.agentInstalls.userHasSelected.collectAsState(initial = false)
+                val completed by app.agentInstalls.completed.collectAsState(initial = emptySet())
+                val showPicker = remember { mutableStateOf(false) }
+                val installedIds = remember(completed) {
+                    completed.filter { id ->
+                        app.agentInstaller.isOnDisk(AgentCatalog.specFor(id) ?: return@filter false)
+                    }.toSet()
+                }
+                LaunchedEffect(hasSelected, boot) {
+                    if (!hasSelected &&
+                        boot is com.dsh.mobile.bootstrap.BootstrapManager.BootstrapState.Ready
+                    ) {
+                        showPicker.value = true
+                    }
+                }
+
+                if (showPicker.value) {
+                    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+                    val scope = rememberCoroutineScope()
+                    ModalBottomSheet(
+                        onDismissRequest = {
+                            // Dismissing without choosing still counts as an
+                            // answer: it must not re-prompt on every launch.
+                            showPicker.value = false
+                        },
+                        sheetState = sheetState,
+                    ) {
+                        AgentPickerSheet(
+                            specs = AgentCatalog.installable,
+                            installedIds = installedIds,
+                            onSkip = {
+                                showPicker.value = false
+                            },
+                            onConfirm = { chosen ->
+                                showPicker.value = false
+                                installAgents(app, chosen)
+                            },
+                        )
+                    }
+                }
 
                 if (!app.bootstrap.isBootstrapped() &&
                     boot !is com.dsh.mobile.bootstrap.BootstrapManager.BootstrapState.Ready
@@ -146,6 +207,36 @@ class MainActivity : ComponentActivity() {
      */
     private fun dispatchCommand(command: String) {
         CommandDispatcher.dispatch?.invoke(command)
+    }
+
+    /**
+     * Install the agents the user picked, then record each success.
+     *
+     * Runs on the app scope, not the Activity, so navigating away mid-install
+     * does not abandon it half-done. Each agent is recorded individually so a
+     * failure never causes a later app open to reinstall the ones that worked.
+     */
+    private fun installAgents(app: DshMobileApp, chosen: Set<String>) {
+        if (chosen.isEmpty()) return
+        (application as DshMobileApp).agentInstallScope.launch {
+            val installer = app.agentInstaller
+            val specs = AgentCatalog.all.filter { it.id in chosen }
+            val pending = installer.pending(chosen, app.agentInstalls.completed.first())
+            Log.i(TAG, "installing ${pending.size} of ${specs.size} selected agents")
+            installer.installAll(pending).forEach { result ->
+                if (result.ok) {
+                    app.agentInstalls.markCompleted(result.spec.id)
+                    Log.i(TAG, "installed ${result.spec.id}")
+                } else {
+                    Log.w(TAG, "install failed ${result.spec.id}: ${result.failure}")
+                }
+            }
+            app.agentInstalls.recordSelection(chosen)
+        }
+    }
+
+    private companion object {
+        const val TAG = "MainActivity"
     }
 
     private fun startAgentService(action: String) {

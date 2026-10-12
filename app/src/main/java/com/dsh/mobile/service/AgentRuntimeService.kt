@@ -100,7 +100,21 @@ class AgentRuntimeService : LifecycleService() {
         super.onStartCommand(intent, flags, startId)
         startForeground(NOTIFICATION_ID, buildNotification("Starting agent runtime…"))
         when (intent?.action) {
-            ACTION_BOOT, ACTION_RESTART -> boot()
+            // ACTION_BOOT is the "make an agent available" request and is
+            // idempotent: a boot with a healthy child already serving the same
+            // agent, workspace and port is a no-op. Without this guard, every
+            // Activity recreation (rotation, "don't keep activities", the
+            // system reclaiming the process while backgrounded) tore down a
+            // running agent and rebuilt it from scratch. That is the bug this
+            // replaces; the Activity-side one-shot flag is only the first layer.
+            // isAlreadyServing() reads the persisted config, so it is a
+            // suspending read. The check runs in lifecycleScope and calls back;
+            // boot() itself stays synchronous and cancellable.
+            ACTION_BOOT -> lifecycleScope.launch {
+                if (isAlreadyServing()) refreshStatus() else boot()
+            }
+            // A restart is an explicit user action and always takes effect.
+            ACTION_RESTART -> boot()
             // Observe only. A live child keeps running and a dead one is left
             // dead - EngineWatchdog owns recovery, so this never races it.
             ACTION_ATTACH -> {
@@ -130,6 +144,43 @@ class AgentRuntimeService : LifecycleService() {
      * late-banner watcher covers anything longer.
      */
     private val LAUNCH_URL_TIMEOUT_MS = 60_000L
+
+    /**
+     * True when a child is alive AND is serving exactly what the user currently
+     * has configured.
+     *
+     * The config comparison is what makes this safe. If the user switched
+     * agent, workspace or mode, "a child exists" is not enough — the running one
+     * is the wrong agent and must be replaced. Comparing against the live
+     * snapshot rather than the last-requested one means a credential save
+     * (which does not change these fields) correctly leaves the agent alone.
+     */
+private suspend fun isAlreadyServing(): Boolean {
+        val status = _status.value
+        if (child?.isAlive != true) return false
+        if (status !is ServiceStatus.Running) return false
+        val app = application as DshMobileApp
+        val config = app.configStore.snapshot()
+        val desiredAgent = AgentRuntime.resolveRunnableAgent(
+            preferred = config.agent,
+            agentsDir = AgentRuntime.agentsDir(this),
+        )
+        return status.agent == desiredAgent &&
+            status.workspace == config.workspacePath
+    }
+
+    /**
+     * Re-publish current state without touching the child process.
+     *
+     * Used by the idempotent ACTION_BOOT path so a returning Activity still sees
+     * fresh status (the approval list in particular, which lives in the service
+     * and must survive the Activity being destroyed and rebuilt).
+     */
+    private fun refreshStatus() {
+        startForeground(NOTIFICATION_ID, buildNotification(notificationText()))
+        setStatus(_status.value)
+        setApprovals(_approvalRequests.value)
+    }
 
     private fun boot() {
         // A fresh intent (e.g. credential save, workspace/mode switch) must
@@ -313,7 +364,7 @@ class AgentRuntimeService : LifecycleService() {
                 // slow plugin tree). Keep watching and upgrade the URL in place
                 // rather than leaving the user on a permanently blank 401 page.
                 if (entryUrl == origin && !AgentRuntime.isGatewayAgent(agent)) {
-                    watchForLaunchUrl(process, logFile, launchUrl, agent, port)
+                    watchForLaunchUrl(process, logFile, launchUrl, agent, port, workspace)
                 }
 
                 updateNotification("${agent.label} running on :$port")
@@ -325,6 +376,7 @@ class AgentRuntimeService : LifecycleService() {
                         // java.lang.Process.pid() is not in the Android SDK
                         // baseline; use a stable local handle instead.
                         pidHint = "pid-${process.hashCode()}",
+                        workspace = workspace.absolutePath,
                     ),
                 )
                 // Arm the crash watchdog: 5s loopback pings from here on.
@@ -372,6 +424,7 @@ class AgentRuntimeService : LifecycleService() {
         launchUrl: AtomicReference<String?>,
         agent: ActiveAgent,
         port: Int,
+        workspace: File,
     ) {
         lifecycleScope.launch(Dispatchers.IO) {
             val found = AtomicReference<String?>(null)
@@ -385,6 +438,7 @@ class AgentRuntimeService : LifecycleService() {
                         port = port,
                         url = url,
                         pidHint = "pid-${process.hashCode()}",
+                        workspace = workspace.absolutePath,
                     ),
                 )
             }
@@ -542,6 +596,15 @@ class AgentRuntimeService : LifecycleService() {
             val port: Int,
             val url: String,
             val pidHint: String,
+            /**
+             * Workspace the child was actually launched against.
+             *
+             * Recorded because `isAlreadyServing` compares it against the live
+             * config: a child serving the right agent but the WRONG workspace is
+             * still wrong, and without this the guard would happily keep a child
+             * that the user has since pointed at a different directory.
+             */
+            val workspace: String = "",
         ) : ServiceStatus
         data class Error(val message: String, val retryable: Boolean) : ServiceStatus
     }

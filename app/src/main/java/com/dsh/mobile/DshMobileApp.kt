@@ -31,7 +31,22 @@ class DshMobileApp : Application() {
         private set
 
     lateinit var diagnostics: DiagnosticsStore
-        private set
+
+    /** Which agents the user chose to install, and whether that happened. */
+    lateinit var agentInstalls: com.dsh.mobile.data.AgentInstallStore
+
+    /** On-demand npm installer for the agents the user picked. */
+    lateinit var agentInstaller: com.dsh.mobile.runtime.AgentInstaller
+
+    /**
+     * Scope for agent installation.
+     *
+     * On the Application, not the Activity: an install is minutes of work that
+     * must survive the user switching apps or rotating mid-download.
+     */
+    val agentInstallScope: kotlinx.coroutines.CoroutineScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO,
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -39,6 +54,8 @@ class DshMobileApp : Application() {
         configStore = RuntimeConfigStore(this)
         bootstrap = BootstrapManager(this)
         diagnostics = DiagnosticsStore(this)
+        agentInstalls = com.dsh.mobile.data.AgentInstallStore(this)
+        agentInstaller = com.dsh.mobile.runtime.AgentInstaller(this)
         watchdog = EngineWatchdog(
             onRestart = {
                 // Workspace data is never wiped — restart only re-mounts.
