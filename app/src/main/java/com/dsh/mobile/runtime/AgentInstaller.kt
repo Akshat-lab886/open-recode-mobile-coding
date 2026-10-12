@@ -8,6 +8,7 @@ import com.dsh.mobile.data.AgentSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import android.util.Log
 import java.util.concurrent.TimeUnit
 
 /**
@@ -147,6 +148,18 @@ class AgentInstaller(private val context: Context) {
     }
 
     /** Skip [count] bytes, tolerating a short read. */
+    /** Copies exactly [count] bytes without buffering the whole payload. */
+    private fun copyExactly(inp: java.io.InputStream, out: java.io.OutputStream, count: Long) {
+        val buf = ByteArray(64 * 1024)
+        var left = count
+        while (left > 0) {
+            val n = inp.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+            if (n <= 0) return
+            out.write(buf, 0, n)
+            left -= n
+        }
+    }
+
     private fun skipFully(input: java.io.InputStream, count: Long) {
         var left = count
         while (left > 0) {
@@ -167,6 +180,57 @@ class AgentInstaller(private val context: Context) {
         "x86_64" -> "x64"
         else -> Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64"
     }
+
+    /**
+     * Agents whose real CLI is a native binary that npm refuses to fetch here.
+     *
+     * npm skips a platform-gated optionalDependency whenever `process.platform`
+     * is not one it recognises. On Android it is "android", so the linux-arm64
+     * binary is skipped and only the ~31 KB JavaScript shim lands - the agent
+     * then looks installed while failing to run.
+     *
+     * The tarball is therefore fetched by explicit URL, which bypasses the
+     * platform gate, and unpacked to the exact path the shim looks for.
+     *
+     * Verified from the published artifacts:
+     *  - `@openai/codex` installs the musl build, a STATIC aarch64 ELF (no
+     *    PT_INTERP, no PT_DYNAMIC), which is why it can run on bionic at all.
+     *    Its `bin/codex.js` explicitly maps `process.platform === "android"`
+     *    to that same musl triple: the vendor intends it to run here.
+     *  - `@anthropic-ai/claude-code` has no equivalent. Its Android native
+     *    packages are not published (they 404 from the registry), so its
+     *    `bin/claude.exe` stays a 500-byte stub that prints
+     *    "Error: claude native binary not installed." It is deliberately absent
+     *    here rather than installed-and-broken.
+     */
+    private data class NativePayload(
+        val id: String,
+        val url: String,
+        /** Path inside the tarball that holds the executable. */
+        val binaryInArchive: String,
+        /** Path under the agent's package dir the launcher expects. */
+        val binaryRelativeTo: String,
+    )
+
+    private val nativePayloads = listOf(
+        NativePayload(
+            id = "codex",
+            url = "https://registry.npmjs.org/@openai/codex/-/codex-0.162.1-linux-arm64.tgz",
+            binaryInArchive = "vendor/aarch64-unknown-linux-musl/bin/codex",
+            binaryRelativeTo = "vendor/aarch64-unknown-linux-musl/bin/codex",
+        ),
+    )
+
+    /** True when this agent's real CLI is already unpacked on disk. */
+    private fun nativeBinaryOnDisk(spec: AgentSpec, dir: File): Boolean {
+        val payload = nativePayloads.firstOrNull { it.id == spec.id } ?: return true
+        val f = File(dir, "lib/node_modules/${spec.npmPackage}/${payload.binaryRelativeTo}")
+        return f.isFile && f.length() > 0
+    }
+
+    /** True when [spec] has a native binary step after the JavaScript install. */
+    internal fun needsNativePayload(spec: AgentSpec): Boolean =
+        nativePayloads.any { it.id == spec.id }
 
     private suspend fun installViaNpm(spec: AgentSpec, pkg: String): Result =
         withContext(Dispatchers.IO) {
@@ -261,6 +325,25 @@ class AgentInstaller(private val context: Context) {
         // the binary is still absent, which later shows up as a blank page. The
         // on-disk check is the real verdict.
         val landed = isOnDisk(spec, dir)
+
+        // Native binary LAST, after npm has finished.
+        //
+        // Order matters and the wrong order fails silently: `npm install -g`
+        // replaces node_modules wholesale, so unpacking the binary beforehand
+        // leaves a correct 255 MB file that npm then deletes. The install still
+        // reported success, and `isOnDisk` still passed, because the JavaScript
+        // launcher was there - so the agent looked installed and could not run.
+        val payload = nativePayloads.firstOrNull { it.id == spec.id }
+        if (landed && payload != null && !nativeBinaryOnDisk(spec, dir)) {
+            if (!installNativePayload(spec, payload)) {
+                return@withContext Result(
+                    spec,
+                    installed = false,
+                    failure = "Installed the launcher but not its native CLI. " +
+                        "The agent would fail to run, so it is not being marked installed.",
+                )
+            }
+        }
         if (exit == 0 && landed) {
             Result(spec, installed = true, output = log.toString())
         } else {
@@ -290,6 +373,69 @@ class AgentInstaller(private val context: Context) {
         }
         return out
     }
+
+
+    /**
+     * Fetch a platform-gated native binary by explicit URL and place it where
+     * the agent's JavaScript launcher looks for it.
+     *
+     * Installing by tarball URL sidesteps npm's os/cpu gate entirely, which is
+     * the only way to get a linux-arm64 payload onto Android. The download is
+     * streamed straight into a temp file because the artifact is ~150 MB and
+     * the app has no room to buffer it in memory.
+     */
+    private suspend fun installNativePayload(spec: AgentSpec, payload: NativePayload): Boolean =
+        withContext(Dispatchers.IO) {
+            val pkgDir = File(agentsDir(), "lib/node_modules/${spec.npmPackage}")
+            val target = File(pkgDir, payload.binaryRelativeTo)
+            if (target.isFile && target.length() > 0) return@withContext true
+            val tmp = File(context.cacheDir, "native-${payload.id}.tgz")
+            return@withContext try {
+                java.net.URL(payload.url).openStream().use { input ->
+                    tmp.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+                }
+                target.parentFile?.mkdirs()
+                var found = false
+                java.util.zip.GZIPInputStream(tmp.inputStream().buffered()).use { gz ->
+                    val header = ByteArray(512)
+                    while (true) {
+                        if (!readFully(gz, header)) break
+                        if (header.all { it == 0.toByte() }) continue
+                        val name = String(header, 0, 100, Charsets.UTF_8)
+                            .trimEnd('\u0000', ' ')
+                        val size = String(header, 124, 12, Charsets.UTF_8)
+                            .trimEnd('\u0000', ' ')
+                            .toLongOrNull(8) ?: 0L
+                        val typeFlag = header[156].toInt().toChar()
+                        if (name.endsWith(payload.binaryInArchive) &&
+                            (typeFlag == '0' || typeFlag == '\u0000')
+                        ) {
+                            // STREAMED, never buffered. The binary is ~255 MB;
+                            // `ByteArray(size)` throws OutOfMemoryError on a
+                            // handset, and `catch (e: Exception)` does not
+                            // catch an Error - so the install reported success
+                            // with nothing on disk.
+                            copyExactly(gz, target.outputStream(), size)
+                            found = target.length() == size
+                            Log.i(
+                                "AgentInstaller",
+                                "native payload: wrote $size bytes for ${payload.id}",
+                            )
+                        } else {
+                            skipFully(gz, size)
+                        }
+                        val pad = (512 - (size % 512)) % 512
+                        if (pad > 0) skipFully(gz, pad)
+                    }
+                }
+                found && target.setExecutable(true)
+            } catch (e: Exception) {
+                android.util.Log.w("AgentInstaller", "native payload failed: ${e.message}")
+                false
+            } finally {
+                tmp.delete()
+            }
+        }
 
     /** Remove an installed agent's files to reclaim storage. */
     suspend fun uninstall(spec: AgentSpec): Boolean = withContext(Dispatchers.IO) {
