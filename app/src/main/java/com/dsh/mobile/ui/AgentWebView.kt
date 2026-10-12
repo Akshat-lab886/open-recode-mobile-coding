@@ -84,6 +84,14 @@ private object PendingFileChooser {
     /** Must be invoked exactly once, with the chosen URIs or null. */
     @Volatile var callback: ValueCallback<Array<Uri>>? = null
 
+    /**
+     * The WebView, set when it is created.
+     *
+     * The activity-result callback is registered before the WebView exists, so
+     * it needs a way back to the page without capturing an uninitialised val.
+     */
+    @Volatile var view: WebView? = null
+
     /** True when the request asked for more than one file. */
     @Volatile var multiple: Boolean = false
 
@@ -178,7 +186,23 @@ fun AgentWebView(
                 data.data != null -> arrayOf(data.data!!)
                 else -> null
             }
+            // The WebView contract requires the original URIs, but a CLI agent
+            // cannot read a content:// URI - it reads files by path. So the
+            // files are staged on disk AND the paths are pushed to the page.
+            val paths = uris?.mapNotNull { stageAttachment(context, it) }
             PendingFileChooser.complete(uris)
+            if (!paths.isNullOrEmpty()) {
+                val js = paths.joinToString(",") { path ->
+                    "'" + path.replace("\\", "\\\\").replace("'", "\\'") + "'"
+                }
+                val target = PendingFileChooser.view
+                target?.post {
+                    target.evaluateJavascript(
+                        "window.__dshFilesStaged && window.__dshFilesStaged([$js]);",
+                        null,
+                    )
+                }
+            }
         } else {
             PendingFileChooser.complete(null)
         }
@@ -204,6 +228,7 @@ fun AgentWebView(
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
 
+            PendingFileChooser.view = this
             addJavascriptInterface(DshJsBridge(onWebApproval, this), "DshBridge")
             WebApprovalRouter.answer = { requestId, approved ->
                 post {
@@ -507,6 +532,49 @@ fun webPromptToApproval(
         summary = summary.take(280),
         rawLine = summary,
     )
+
+/**
+ * Copy a picked attachment into the agent workspace and return its path.
+ *
+ * The five CLI agents (Claude Code, Codex, OpenCode, Antigravity, Hermes) all
+ * read work from the filesystem, and their stdin carries plain text - so
+ * inlining a photo as base64 into a prompt is useless. Staging the file on disk
+ * and handing the agent a path is what actually works for code files *and*
+ * images, and it is the same mechanism a desktop user gets by dragging a file
+ * into the project.
+ *
+ * Images are copied as-is. Everything else is copied byte-for-byte too: an
+ * agent can read any of it, and re-encoding would corrupt binaries.
+ */
+private fun stageAttachment(context: Context, uri: Uri): String? {
+    val name = queryDisplayName(context, uri) ?: return null
+    // Never trust a display name as a path - it may contain separators or be
+    // absolute, which would let a picked file escape the workspace.
+    val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifBlank { "attachment" }
+    val dir = File(context.filesDir, "workspaces/saf-picked")
+    if (!dir.isDirectory && !dir.mkdirs()) return null
+    val target = File(dir, safe)
+    return try {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { output -> input.copyTo(output, 1 shl 16) }
+        } ?: return null
+        target.absolutePath
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** Best-effort display name for a content URI. */
+private fun queryDisplayName(context: Context, uri: Uri): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
 
 /** URI handed to a camera app for the current capture, if any. */
 private var pendingCameraUri: Uri? = null

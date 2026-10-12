@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Key
@@ -72,6 +73,7 @@ fun ControlCenterContent(
     onWorkspacePicked: (String) -> Unit,
     onModeSelected: (AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
+    onManageAgents: () -> Unit,
     onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
@@ -142,6 +144,23 @@ fun ControlCenterContent(
             selected = uiState.config.agent,
             onSelected = onAgentSelected,
         )
+
+        // Recovery path for a first run that was skipped.
+        //
+        // The install sheet is shown once, before anything is on the device.
+        // Without this the only way to add an agent would be to clear app data
+        // and start over - which on this app means re-bootstrapping a 40 MB
+        // runtime, so "skip" has to be reversible from Settings.
+        OutlinedButton(
+            onClick = onManageAgents,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = tokens.minTouchTarget),
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(tokens.spaceSm))
+            Text("Add or remove coding agents")
+        }
 
         // -- e) per-agent provider -------------------------------------------
         SectionHeader(

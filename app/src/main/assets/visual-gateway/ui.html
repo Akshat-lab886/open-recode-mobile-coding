@@ -37,6 +37,10 @@
   button { background:var(--accent); border:none; border-radius:12px; color:#04121F;
     font-weight:700; padding:0 16px; font-size:15px; }
   button:disabled { opacity:.45; }
+#pending{padding:0 12px 6px;display:flex;gap:6px;flex-wrap:wrap}
+#pending .chip{font:11px/1 ui-monospace,monospace;background:#2a2a31;color:#cfd3da;
+  border-radius:999px;padding:6px 9px;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#attach{min-width:48px;min-height:48px;font-size:18px}
 </style>
 </head>
 <body>
@@ -46,9 +50,12 @@
 </header>
 <div id="chat"><div class="msg sys">Connected to visual gateway.</div></div>
 <form id="composer">
+  <input id="file" type="file" multiple hidden />
+  <button type="button" id="attach" aria-label="Attach files">📎</button>
   <input id="box" placeholder="Message the agent…" autocomplete="off" autocapitalize="sentences" />
   <button type="submit" id="send">Send</button>
 </form>
+<div id="pending"></div>
 <script>
 (function () {
   'use strict';
@@ -58,6 +65,43 @@
   var sendBtn = document.getElementById('send');
   var statusEl = document.getElementById('status');
   var dot = document.getElementById('dot');
+  var attachBtn = document.getElementById('attach');
+  var fileInput = document.getElementById('file');
+  var pendingEl = document.getElementById('pending');
+  var pending = [];
+
+  /*
+   * Attachments.
+   *
+   * Claude Code, Codex, OpenCode, Antigravity and Hermes all read work from
+   * the filesystem and accept plain text on stdin, so a content:// URI or a
+   * base64 blob is useless to them. The native side stages each picked file
+   * into the workspace and calls back with a real path; those paths ride along
+   * with the next message so the agent can open them.
+   */
+  function renderPending() {
+    pendingEl.innerHTML = pending
+      .map(function (p) { return '<span class="chip">' + p.split('/').pop() + '</span>'; })
+      .join('');
+  }
+
+  window.__dshFilesStaged = function (paths) {
+    paths.forEach(function (p) { if (pending.indexOf(p) === -1) pending.push(p); });
+    renderPending();
+  };
+
+  attachBtn.addEventListener('click', function () { fileInput.click(); });
+
+  // Some WebViews never fire change; a no-op selection would strand the button.
+  fileInput.addEventListener('change', function () {
+    if (fileInput.files && fileInput.files.length) {
+      // The native picker returns paths; this is the browser-fallback path.
+      Array.prototype.forEach.call(fileInput.files, function (f) {
+        if (pending.indexOf(f.name) === -1) pending.push(f.name);
+      });
+      renderPending();
+    }
+  });
 
   function addMsg(text, who) {
     var d = document.createElement('div');
@@ -78,13 +122,25 @@
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var v = box.value.trim();
-    if (!v) return;
+    // A message that only carries attachments is still worth sending: the
+    // whole point is to tell the agent which files to look at.
+    if (!v && !pending.length) return;
     box.value = '';
     sendBtn.disabled = true;
+
+    // Attachments travel as paths on the same line as the prompt. The gateway
+    // flattens newlines before handing the text to the CLI's stdin, so the
+    // paths are separated by spaces rather than put on their own lines.
+    var text = v;
+    if (pending.length) {
+      text += (v ? ' ' : '') + 'Attached: ' + pending.join(' ');
+      pending = [];
+      renderPending();
+    }
     fetch('/send', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: v })
+      body: JSON.stringify({ text: text })
     }).then(function (r) {
       sendBtn.disabled = false;
       if (!r.ok) addMsg('Backend not running — restart the engine.', 'err');

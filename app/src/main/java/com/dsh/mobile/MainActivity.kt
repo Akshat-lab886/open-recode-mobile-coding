@@ -152,6 +152,7 @@ class MainActivity : ComponentActivity() {
                         onWorkspacePicked = vm::setWorkspace,
                         onModeSelected = vm::setAgentMode,
                         onAgentSelected = vm::setActiveAgent,
+                        onManageAgents = { showPicker.value = true },
                         onSaveAgentProvider = vm::saveAgentProvider,
                         onApprovalResult = vm::resolveApproval,
                         onDismissApproval = vm::dismissApproval,
