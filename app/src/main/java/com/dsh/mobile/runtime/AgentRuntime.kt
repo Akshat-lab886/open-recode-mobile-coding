@@ -406,9 +406,12 @@ object AgentRuntime {
         // crashing the picker.
         return when (agent) {
             ActiveAgent.DEEPSEEK_HARNESS -> File(dshEntryPoint(agentsDir)).takeIf { it.isFile }
-            ActiveAgent.CLAUDE_CODE -> File(agentsDir, "claude/bin/claude").takeIf { it.isFile }
-            ActiveAgent.CODEX -> File(agentsDir, "codex/bin/codex").takeIf { it.isFile }
-            ActiveAgent.OPENCODE -> File(agentsDir, "opencode/bin/opencode").takeIf { it.isFile }
+            // Same npm -g --prefix layout as the catalogue: DIR/bin/<name>.
+            // The previous DIR/<agent>/bin/<agent> paths never existed, which is
+            // why every optional agent reported "not installed" forever.
+            ActiveAgent.CLAUDE_CODE -> File(agentsDir, "bin/claude").takeIf { it.isFile }
+            ActiveAgent.CODEX -> File(agentsDir, "bin/codex").takeIf { it.isFile }
+            ActiveAgent.OPENCODE -> File(agentsDir, "bin/opencode").takeIf { it.isFile }
             else -> null
         }
     }

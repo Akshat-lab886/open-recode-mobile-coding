@@ -7,6 +7,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * The catalogue is the single source of truth for which agents exist and how
@@ -158,6 +159,48 @@ class AgentCatalogContractTest {
     fun `gateway agents declare a backend id`() {
         AgentCatalog.all.filter { it.needsGateway }.forEach {
             assertTrue("${it.id} needs the gateway but has no backend id", !it.gatewayBackend.isNullOrBlank())
+        }
+    }
+
+    /**
+     * npm-installed agents must be looked for where npm actually puts them.
+     *
+     * VERIFIED by running `npm install -g <pkg> --prefix <dir>` for real:
+     *
+     *   <dir>/bin/codex -> ../lib/node_modules/@openai/codex/bin/codex.js
+     *   <dir>/bin/claude -> ../lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+     *
+     * The catalogue used to say `<dir>/claude/bin/claude` and `<dir>/codex/bin/codex`.
+     * npm never creates those directories, so both the install check and the
+     * launch check failed forever - which is exactly why only DSH ever ran, and
+     * why every optional agent looked "not installed" no matter what the user
+     * selected.
+     */
+    @Test
+    fun `npm agents resolve to the npm prefix layout`() {
+        // DSH ships as a bundled payload and has two legitimate layouts, so it
+        // is deliberately exempt; this rule is about the optional npm agents.
+        AgentCatalog.all
+            .filter { it.install is com.dsh.mobile.data.InstallKind.NPM && it.id != "dsh" }
+            .forEach { spec ->
+                assertTrue(
+                    "${spec.id} must live under the npm global bin/ directory, " +
+                        "not a per-agent subdirectory npm never creates",
+                    spec.relativeBinary.startsWith("bin/"),
+                )
+            }
+    }
+
+    @Test
+    fun `optional agents use catalog paths rather than the legacy switch`() {
+        val source = File("src/main/java/com/dsh/mobile/runtime/AgentRuntime.kt").readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("""//[^\n]*"""), "")
+        listOf("claude/bin/claude", "codex/bin/codex", "opencode/bin/opencode").forEach {
+            assertFalse(
+                "the legacy fallback still looks for $it, which npm never creates",
+                source.contains("\"$it\""),
+            )
         }
     }
 }
