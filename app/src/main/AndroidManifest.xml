@@ -7,6 +7,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Only for the agent's "attach photo" control. Declared optional so the
+         app still installs on a device with no camera at all. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Battery-optimization exemption intent (ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
          keeps the watchdog's 5s loopback pings alive under Doze. Requested
          from the error card, never at first boot. -->
@@ -30,6 +34,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Camera capture for the agent's "attach photo" control.
+             The WebView file chooser runs inside the app, so it must be granted
+             the URI itself; the provider is what makes that grant possible. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <service
             android:name=".service.AgentRuntimeService"

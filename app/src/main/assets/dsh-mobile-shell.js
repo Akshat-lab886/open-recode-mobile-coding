@@ -398,6 +398,59 @@
     }
   }
 
+
+  /**
+   * Native picker bridging.
+   *
+   * The agent's own "Choose workspace" control is dead in this WebView. It is
+   * verified on-device: clicking it creates no menu element, raises no error,
+   * and does nothing at all. The page targets a desktop shell, where it opens a
+   * native folder dialog; there is no such dialog here.
+   *
+   * The WebView does expose showDirectoryPicker(), but every call rejects with
+   * SecurityError, so even a shim on top of that API would fail - the real
+   * picker has to be Android's, which the app already owns.
+   *
+   * So the control is redirected to the native Storage Access Framework picker
+   * instead of being reimplemented, and the chosen path is handed back so the
+   * label updates rather than looking inert.
+   */
+  function bridgeWorkspacePicker() {
+    if (window.__dshWorkspaceBridged) return;
+    window.__dshWorkspaceBridged = true;
+
+    // Called from the native side once a folder has been chosen.
+    window.__dshWorkspaceChosen = function (path) {
+      document.dispatchEvent(new CustomEvent('dsh:workspace', { detail: path }));
+      // Update the visible label: the button shows a name, not a path.
+      var label = document.querySelector('[class*="workspaceLabel"], [class*="_workspaceLabel"]');
+      if (label && path) {
+        var parts = String(path).split('/').filter(Boolean);
+        label.textContent = parts[parts.length - 1] || path;
+      }
+    };
+
+    // Capture phase, so the page's own dead handler never runs.
+    document.addEventListener(
+      'click',
+      function (ev) {
+        var node = ev.target;
+        while (node && node !== document.body) {
+          if (node.tagName === 'BUTTON' && /workspace/i.test(String(node.className))) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (window.DshBridge && window.DshBridge.requestWorkspacePicker) {
+              window.DshBridge.requestWorkspacePicker();
+            }
+            return;
+          }
+          node = node.parentElement;
+        }
+      },
+      true,
+    );
+  }
+
   /** Re-measure after a resize, keyboard show/hide, or rotation. */
   function syncViewportHeight() {
     document.documentElement.style.setProperty('--dsh-vh', viewportHeight());
@@ -458,6 +511,9 @@
     installViewportHeightRepair();
     repairDocumentHeight();
     scanForApprovalPrompts(document.body);
+    // Delegated at the document level, so it survives the SPA replacing the
+    // header. Re-running is a no-op thanks to the guard inside.
+    bridgeWorkspacePicker();
   }
 
   apply();

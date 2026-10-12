@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Paths the WebView file chooser may hand to a camera app.
+
+  Scoped to a dedicated cache subdirectory rather than the whole cache: the
+  chooser hands these URIs to other apps, so the grant should expose as little
+  of our storage as possible. Nothing here is agent workspace data.
+-->
+<paths>
+    <cache-path name="captures" path="captures/" />
+</paths>

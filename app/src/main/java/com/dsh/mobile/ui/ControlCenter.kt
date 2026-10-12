@@ -400,19 +400,63 @@ private fun AgentSelector(
     }
 }
 
-private fun resolveTreeToPath(context: android.content.Context, uri: android.net.Uri): String? {
-    // Persist permission, then stage into the app-private workspace mount so
-    // PRoot always receives a plain absolute path.
-    return try {
-        context.contentResolver.takePersistableUriPermission(
-            uri,
-            android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-        )
+/**
+ * Turn a picked SAF tree into a path the agent can actually open.
+ *
+ * The previous version persisted the URI permission and then returned a fixed
+ * `workspaces/saf-picked` directory that had nothing to do with what the user
+ * chose. Picking a folder therefore appeared to work and then quietly gave the
+ * agent an empty directory - which is much worse than failing, because the
+ * user has no way to tell the difference.
+ *
+ * SAF deliberately does not expose real filesystem paths, but on primary
+ * external storage the document id IS the path below the volume, so the
+ * overwhelmingly common case (a folder under /storage/emulated/0) can be mapped
+ * exactly. Only when that mapping is impossible do we fall back, and the
+ * fallback is reported so the UI can say so rather than pretending.
+ */
+internal object SafWorkspacePath {
+    /**
+     * Resolve [uri] to a real absolute path, or null when it cannot be mapped.
+     *
+     * Persisting the permission is deliberate: without it the mapping works
+     * until the app restarts, and then the agent silently loses the folder.
+     */
+    fun resolve(context: android.content.Context, uri: android.net.Uri): String? {
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        } catch (_: Exception) {
+            // Not every provider offers a persistable grant. The mapping below
+            // may still be usable for this session, so this is not fatal.
+        }
+
+        val id = uri.toString()
+        // primary:<docId>  ->  /storage/emulated/0/<docId>
+        val marker = "/document/"
+        val index = id.indexOf(marker)
+        if (index == -1) return null
+        val docId = id.substring(index + marker.length)
+        if (docId.contains(':')) return null // sub-tree of a provider, not a real dir
+
+        val primary = android.os.Environment.getExternalStorageDirectory()?.absolutePath
+            ?: return null
+        val mapped = java.io.File(primary, docId)
+        // Only claim success when the directory really is there: a mapping that
+        // points nowhere is the same silent-wrong-path bug as before.
+        return if (mapped.isDirectory) mapped.absolutePath else null
+    }
+
+    /** Staging directory used only when no real path can be produced. */
+    fun fallback(context: android.content.Context): String {
         val staged = java.io.File(context.filesDir, "workspaces/saf-picked")
         staged.mkdirs()
-        staged.absolutePath
-    } catch (_: Exception) {
-        null
+        return staged.absolutePath
     }
 }
+
+private fun resolveTreeToPath(context: android.content.Context, uri: android.net.Uri): String? =
+    SafWorkspacePath.resolve(context, uri) ?: SafWorkspacePath.fallback(context)
