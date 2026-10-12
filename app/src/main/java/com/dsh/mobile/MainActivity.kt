@@ -31,6 +31,17 @@ import com.dsh.mobile.ui.theme.DshMobileTheme
  */
 class MainActivity : ComponentActivity() {
 
+    /**
+     * True once we have asked the service to boot in this process.
+     *
+     * Guards against the Activity being recreated (rotation, low-memory
+     * restart, "don't keep activities") from booting a second time. The flag
+     * is deliberately NOT saved across process death: after the process dies
+     * the sticky service is restarted with a null intent and owns the boot,
+     * so re-requesting from a fresh Activity is still correct.
+     */
+    private var agentBootRequested = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -98,11 +109,30 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        // Re-attach to the sticky service on every foreground; the service
-        // gates internally on bootstrap, so late setup still boots cleanly.
         val app = application as DshMobileApp
-        if (app.bootstrap.isBootstrapped()) {
+        if (!app.bootstrap.isBootstrapped()) return
+
+        // Re-attach, never re-boot.
+        //
+        // This used to send ACTION_BOOT on every foreground. onStart() runs on
+        // every return to the app - switching to another app and coming back
+        // included - and boot() begins by cancelling the running job and
+        // killing the child process. So the app deliberately destroyed live
+        // agent work and reloaded the entire environment behind the user's
+        // back, which read as "the app cannot keep a session alive".
+        //
+        // The service is a sticky foreground service that deliberately outlives
+        // this Activity, so the work was never actually at risk: we were
+        // throwing it away. Re-attaching only re-publishes current state, and
+        // EngineWatchdog still owns recovery if the child genuinely dies.
+        //
+        // Boot is requested exactly once, at first create, when there is
+        // nothing running to lose.
+        if (!agentBootRequested) {
+            agentBootRequested = true
             startAgentService(AgentRuntimeService.ACTION_BOOT)
+        } else {
+            startAgentService(AgentRuntimeService.ACTION_ATTACH)
         }
     }
 

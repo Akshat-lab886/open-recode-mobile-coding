@@ -101,11 +101,23 @@ class AgentRuntimeService : LifecycleService() {
         startForeground(NOTIFICATION_ID, buildNotification("Starting agent runtime…"))
         when (intent?.action) {
             ACTION_BOOT, ACTION_RESTART -> boot()
+            // Observe only. A live child keeps running and a dead one is left
+            // dead - EngineWatchdog owns recovery, so this never races it.
+            ACTION_ATTACH -> {
+                startForeground(NOTIFICATION_ID, buildNotification(notificationText()))
+                setStatus(_status.value)
+                setApprovals(_approvalRequests.value)
+            }
             ACTION_STOP -> {
                 stopChild()
                 setStatus(ServiceStatus.Idle)
                 stopSelf()
             }
+            // Null intent = Android restarted us after process death (START_
+            // STICKY). The Activity is gone, so nothing else will ever boot
+            // the agent again and it would sit Idle forever. This is the one
+            // case where booting here is the correct answer.
+            null -> boot()
         }
         return START_STICKY
     }
@@ -485,6 +497,14 @@ class AgentRuntimeService : LifecycleService() {
         )
     }
 
+    /** One line describing what the runtime is doing, for the FGS notification. */
+    private fun notificationText(): String = when (val st = _status.value) {
+        is ServiceStatus.Idle -> "Idle"
+        is ServiceStatus.Booting -> st.step
+        is ServiceStatus.Running -> "${st.agent.label} on 127.0.0.1:${st.port}"
+        is ServiceStatus.Error -> st.message.take(120)
+    }
+
     private fun buildNotification(text: String): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pending = PendingIntent.getActivity(
@@ -530,6 +550,17 @@ class AgentRuntimeService : LifecycleService() {
         const val ACTION_BOOT = "com.dsh.mobile.action.BOOT"
         const val ACTION_RESTART = "com.dsh.mobile.action.RESTART"
         const val ACTION_STOP = "com.dsh.mobile.action.STOP"
+
+        /**
+         * Re-attach without respawning.
+         *
+         * Sent by MainActivity.onStart on every return to the app. The service
+         * is sticky and outlives the Activity on purpose, so re-booting here
+         * destroyed live work: boot() cancels the running job and kills the
+         * child, so switching apps and coming back reloaded the whole
+         * environment. Re-attaching only re-publishes current state.
+         */
+        const val ACTION_ATTACH = "com.dsh.mobile.action.ATTACH"
 
         private const val TAG = "AgentRuntimeService"
         private const val CHANNEL_ID = "agent_runtime"
