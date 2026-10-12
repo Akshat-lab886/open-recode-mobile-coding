@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
@@ -61,7 +59,6 @@ fun SessionHistorySheet(
             .fillMaxWidth()
             // ModalBottomSheet measures content with unbounded height; a
             // LazyColumn against an infinite maximum throws at runtime.
-            .heightIn(max = maxSheetHeight),
     ) {
         Row(
             modifier = Modifier
@@ -98,13 +95,15 @@ fun SessionHistorySheet(
             return@Column
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = maxSheetHeight - 64.dp),
+        // A plain Column, not a LazyColumn: this sheet is hosted inside the
+        // Control Center's own verticalScroll, and a nested LazyColumn is
+        // measured with an infinite height and throws. Sessions are capped at
+        // 50 by the store, so laying them out eagerly costs nothing real.
+        Column(
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(tokens.spaceSm),
         ) {
-            items(items, key = { it.id }) { session ->
+            items.forEach { session ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

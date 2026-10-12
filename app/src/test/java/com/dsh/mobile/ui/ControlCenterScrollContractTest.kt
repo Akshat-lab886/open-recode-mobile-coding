@@ -75,6 +75,33 @@ class ControlCenterScrollContractTest {
         }
     }
 
+    /**
+     * A lazy list inside the Control Center's scroll container is the same
+     * crash wearing a different hat.
+     *
+     * The session list shipped as a LazyColumn inside the panel's
+     * verticalScroll. Scrolling to it threw the same
+     * "infinity maximum height constraints" exception and killed the app - the
+     * panel bounded its own height, but the nested lazy list still inherited an
+     * infinite height from the scroll parent above it. The outer scroll has to
+     * be the only one.
+     */
+    @Test
+    fun `no lazy list is nested inside the panel scroll`() {
+        val body = File("src/main/java/com/dsh/mobile/ui/SessionHistorySheet.kt")
+            .readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("""//[^\n]*"""), "")
+            .replace(Regex("""import [^\n]*"""), "")
+
+        assertFalse(
+            "the session list is hosted inside the Control Center's verticalScroll; " +
+                "a nested LazyColumn is measured with an infinite height and crashes " +
+                "the app as soon as the user scrolls to it",
+            Regex("""\bLazyColumn\b|\bLazyRow\b|\blazy\s*\{""").containsMatchIn(body),
+        )
+    }
+
     @Test
     fun `scrolling column is bounded explicitly`() {
         val body = stripped()
