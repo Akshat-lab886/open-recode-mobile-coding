@@ -121,17 +121,38 @@ object AgentCatalog {
             gatewayBackend = null,
             argvVerified = true,
         ),
+        // Claude Code cannot run on Android as Anthropic publishes it. Kept in
+        // the catalogue with the reason on record rather than offered as an
+        // install that cannot finish - offering it was worse than the bug.
+        //
+        // Verified, not assumed:
+        //  - `bin/claude.exe` is a 500-byte stub that prints
+        //    "Error: claude native binary not installed."
+        //  - its postinstall expects a platform package keyed
+        //    `linux-arm64-android`, and those packages 404 on the public
+        //    registry, so the postinstall bails and leaves the stub;
+        //  - `FAIL_ON_MISSING_NATIVE` is `false`, so **npm reports the install
+        //    as successful** with a dead binary - the worst possible outcome;
+        //  - the `-musl` variant is musl-DYNAMIC (PT_INTERP
+        //    /lib/ld-musl-aarch64.so.1) and ships no loader, so it does not
+        //    help either.
+        // Anthropic has acknowledged Android as future work.
         AgentSpec(
             id = "claude",
             label = "Claude Code",
-            install = InstallKind.NPM("@anthropic-ai/claude-code"),
+            install = InstallKind.Unsupported(
+                "Anthropic publishes no Android build. Its postinstall looks for " +
+                    "@anthropic-ai/claude-code-linux-arm64-android, which is not " +
+                    "published (404), and npm then reports success while leaving a " +
+                    "500-byte stub that cannot run.",
+            ),
             npmPackage = "@anthropic-ai/claude-code",
             approxInstallBytes = 260L * 1024 * 1024,
             defaultPort = 3091,
             relativeBinary = "bin/claude",
             needsGateway = true,
             gatewayBackend = "claude",
-            argvVerified = true,
+            argvVerified = false,
         ),
         AgentSpec(
             id = "codex",

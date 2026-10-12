@@ -165,11 +165,32 @@ class AgentInstallStoreTest {
 
     @Test
     fun `argv verification flags are honest`() {
-        // Only dsh/claude/codex flags have been checked against a real --help.
+        // Only dsh and codex have been checked against a real --help - and
+        // codex's was checked on this device, against the installed binary.
+        //
+        // claude moved here deliberately: its flags cannot be verified because
+        // the CLI cannot run at all on Android, so claiming otherwise would be
+        // a flag nobody could ever earn.
         assertEquals(
-            listOf("antigravity", "hermes", "opencode"),
+            listOf("antigravity", "claude", "hermes", "opencode"),
             AgentCatalog.all.filterNot { it.argvVerified }.map { it.id }.sorted(),
         )
+    }
+
+    @Test
+    fun `agents that cannot run on android are not offered as installable`() {
+        // A dead install is worse than an absent one: npm reports success and
+        // leaves a 500-byte stub for Claude Code. It must not be selectable.
+        val claude = AgentCatalog.all.first { it.id == "claude" }
+        assertTrue("claude must not be offered", claude.install is InstallKind.Unsupported)
+        assertFalse("claude must not be offered for install", claude.available)
+        assertFalse("claude must be absent from the installable list", AgentCatalog.installable.any { it.id == "claude" })
+        assertTrue(
+            "the reason must be shown rather than silently dropped",
+            (claude.install as InstallKind.Unsupported).reason.isNotBlank(),
+        )
+        // Codex is the opposite case and must stay offered.
+        assertTrue(AgentCatalog.installable.any { it.id == "codex" })
     }
 
     @Test
