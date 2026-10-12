@@ -102,6 +102,31 @@ class ControlCenterScrollContractTest {
         )
     }
 
+    /**
+     * A child section must not bring its own vertical scroll.
+     *
+     * The per-agent provider section carried `Modifier.verticalScroll` while
+     * already being hosted inside the Control Center's `verticalScroll`. The
+     * inner scroll inherits an infinite height from the outer one and throws
+     * "Vertically scrollable component was measured with an infinity maximum
+     * height constraints" - killing the app the moment Settings opened. The
+     * panel already scrolls; a nested scroll can only ever be wrong here.
+     */
+    @Test
+    fun `no section nests a scroll inside the panel scroll`() {
+        val body = File("src/main/java/com/dsh/mobile/ui/PerAgentProviderSection.kt")
+            .readText()
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("""//[^\n]*"""), "")
+            .replace(Regex("""import [^\n]*"""), "")
+
+        assertFalse(
+            "this section is hosted inside the Control Center's verticalScroll; " +
+                "a second verticalScroll makes it crash the app on open",
+            Regex("""\.verticalScroll\(|LazyColumn\s*\(""").containsMatchIn(body),
+        )
+    }
+
     @Test
     fun `scrolling column is bounded explicitly`() {
         val body = stripped()

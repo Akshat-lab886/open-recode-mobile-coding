@@ -6,8 +6,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -81,7 +79,13 @@ fun PerAgentProviderSection(
     val selectable = installedAgents.ifEmpty { listOf(currentAgent) }
 
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
+        // No scroll of its own: this section is hosted inside the Control
+        // Center's verticalScroll, so adding a second one made the inner
+        // scroll inherit an infinite height from its parent and throw
+        // "Vertically scrollable component was measured with an infinity
+        // maximum height constraints" - which crashed the app on opening
+        // Settings. The enclosing panel already scrolls.
+        modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(tokens.spaceMd),
     ) {
         Text(
