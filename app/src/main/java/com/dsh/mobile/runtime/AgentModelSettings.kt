@@ -45,11 +45,28 @@ import java.io.File
  * names a route that does not exist in the running agent, and chat stays
  * disabled with send and attachment rendered off.
  *
- * Adding the bundle by hand is not a fix either: the profile's `node_modules`
- * is empty, so the agent stopped booting altogether (HTTP 000) until the
- * profile was restored. Making this work means bundling the plugin and its
- * dependency closure into the profile at bootstrap - which is the next piece
- * of work, and is deliberately not faked here.
+ * ## Why a plain bundle entry is the wrong fix (verified on device)
+ *
+ * Adding it to `dsh.profile.bundles` fails at boot, and fails loudly:
+ *
+ *     Error: dsh: profile bundle "@deepseek-ai/dsh-llm-deepseek"
+ *            declares no dsh.bundle in its package.json
+ *
+ * So `dsh-llm-deepseek` is a **plugin, not a bundle**. A bundle is a package
+ * whose manifest declares `"dsh": { "bundle": { "patch": "./cordis.patch.yml" } }`
+ * and which owns a patch layer; a plugin has no patch layer of its own and has
+ * to be registered through the entry list instead. The shipped profile's
+ * `cordis.patch.yml` is `[]`.
+ *
+ * The remaining piece is therefore: register the plugin through
+ * `cordis.patch.yml`, and let it resolve. Per `@deepseek-ai/dsh-app-boot`,
+ * resolution is two-anchor - profile-local `node_modules` wins, and
+ * `$DSH_HOME/profiles/node_modules` supplies the installation closure through
+ * Node's ordinary parent-walk. Every package needed
+ * (`dsh-llm-deepseek`, `dsh-llm`, `dsh-brand`, `dsh-util-values`,
+ * `schemastery`, `eventsource-parser`, `dsh-llm-retry`) is already present
+ * under `agents/dsh/node_modules`, so nothing has to be downloaded - only
+ * linked and registered.
  */
 internal object AgentModelSettings {
 
