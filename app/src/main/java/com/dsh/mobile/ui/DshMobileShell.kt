@@ -107,6 +107,9 @@ fun DshMobileShell(
     onModeSelected: (com.dsh.mobile.data.AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
     onManageAgents: () -> Unit = {},
+    sessions: kotlinx.coroutines.flow.Flow<List<com.dsh.mobile.data.SessionHistoryStore.Session>>? = null,
+    onDeleteSession: (String) -> Unit = {},
+    onClearSessions: () -> Unit = {},
     onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
     onApprovalResult: (requestId: String, approved: Boolean) -> Unit,
     onDismissApproval: (requestId: String) -> Unit,
@@ -199,6 +202,9 @@ fun DshMobileShell(
                 onModeSelected = onModeSelected,
                 onAgentSelected = onAgentSelected,
                 onManageAgents = onManageAgents,
+                sessions = sessions,
+                onDeleteSession = onDeleteSession,
+                onClearSessions = onClearSessions,
                 onSaveAgentProvider = onSaveAgentProvider,
             )
         } else {
@@ -278,6 +284,9 @@ fun DshMobileShell(
                         onModeSelected = onModeSelected,
                         onAgentSelected = onAgentSelected,
                         onManageAgents = onManageAgents,
+                        sessions = sessions,
+                        onDeleteSession = onDeleteSession,
+                        onClearSessions = onClearSessions,
                         onSaveAgentProvider = onSaveAgentProvider,
                         modifier = Modifier.widthIn(max = DshTheme.tokens.contentMaxWidth),
                     )
@@ -423,6 +432,9 @@ private fun ExpandedLayout(
     onModeSelected: (com.dsh.mobile.data.AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
     onManageAgents: () -> Unit = {},
+    sessions: kotlinx.coroutines.flow.Flow<List<com.dsh.mobile.data.SessionHistoryStore.Session>>? = null,
+    onDeleteSession: (String) -> Unit = {},
+    onClearSessions: () -> Unit = {},
     onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
 ) {
     val tokens = DshTheme.tokens
@@ -468,6 +480,9 @@ private fun ExpandedLayout(
                             onModeSelected = onModeSelected,
                             onAgentSelected = onAgentSelected,
                             onManageAgents = onManageAgents,
+                            sessions = sessions,
+                            onDeleteSession = onDeleteSession,
+                            onClearSessions = onClearSessions,
                             onSaveAgentProvider = onSaveAgentProvider,
                             modifier = Modifier.fillMaxSize(),
                             // Without this the panel is a one-way door: on a

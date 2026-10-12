@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
@@ -75,6 +76,10 @@ fun ControlCenterContent(
     onModeSelected: (AgentMode) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
     onManageAgents: () -> Unit,
+    /** Sessions recorded on this device; the user owns and can remove them. */
+    sessions: kotlinx.coroutines.flow.Flow<List<com.dsh.mobile.data.SessionHistoryStore.Session>>? = null,
+    onDeleteSession: (String) -> Unit = {},
+    onClearSessions: () -> Unit = {},
     onSaveAgentProvider: (String, String, String?, String, String) -> Unit = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
@@ -155,6 +160,23 @@ fun ControlCenterContent(
             selected = uiState.config.agent,
             onSelected = onAgentSelected,
         )
+
+        // Past sessions. Present only when the host supplies the store, so the
+        // panel keeps working in previews and tests without one.
+        if (sessions != null) {
+            SectionHeader(
+                title = "Past sessions",
+                icon = Icons.Default.History,
+                subtitle = "Stored only on this device. Open a session's log or " +
+                    "remove it and its transcript.",
+            )
+            SessionHistorySheet(
+                sessions = sessions,
+                onDelete = onDeleteSession,
+                onClearAll = onClearSessions,
+            )
+            Spacer(Modifier.height(tokens.spaceMd))
+        }
 
         // Recovery path for a first run that was skipped.
         //
