@@ -2,6 +2,9 @@ package com.dsh.mobile.runtime
 
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentCatalog
+import com.dsh.mobile.data.AgentMode
+import com.dsh.mobile.data.ControlBundle
+import com.dsh.mobile.data.ControlSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
@@ -216,5 +219,79 @@ class AgentCatalogContractTest {
                 AgentCatalog.specFor("antigravity")!!.approxInstallBytes,
             AgentCatalog.downloadBytes(setOf("opencode", "antigravity"), emptySet()),
         )
+    }
+
+    @Test
+    fun `ControlAdapter emits real codex argv not shebang flags`() {
+        val a = AgentCatalog.ControlAdapter
+        // Plan mode -> collaboration_mode="plan" (the real codex arg, verified in
+        // codex's flag parser), NOT a fake flag.
+        assertEquals(
+            listOf("-c", "collaboration_mode=\"plan\""),
+            a.argvFor("codex", ControlBundle(mode = "plan")),
+        )
+        // Full-network mode -> sandbox full + approval-mode disable (real codex args).
+        val full = a.argvFor("codex", ControlBundle(mode = "full-network"))
+        assertTrue(full.contains("--sandbox"))
+        assertTrue(full.contains("workspace-full"))
+        assertTrue(full.contains("--approval-mode"))
+        assertTrue(full.contains("disable"))
+        // Model-only override still carries the default approval mode.
+        assertEquals(
+            listOf("-m", "gpt-4", "--approval-mode", "strict"),
+            a.argvFor("codex", ControlBundle(model = "gpt-4")),
+        )
+    }
+
+    @Test
+    fun `ControlAdapter emits real claude argv and skips unsupported`() {
+        val a = AgentCatalog.ControlAdapter
+        assertEquals(
+            listOf("--dangerously-skip-permissions"),
+            a.argvFor("claude", ControlBundle(mode = "bypass")),
+        )
+        assertEquals(
+            listOf("--effort", "high"),
+            a.argvFor("claude", ControlBundle(effort = "high")),
+        )
+        // dsh: preset handled separately; unsupported: no argv/env.
+        assertTrue(a.argvFor("dsh", ControlBundle(mode = "ptc")).isEmpty())
+        assertTrue(a.envFor("dsh", ControlBundle()).isEmpty())
+        assertTrue(a.argvFor("hermes", ControlBundle()).isEmpty())
+    }
+
+    @Test
+    fun `control surface only exposes real options per agent`() {
+        val dshModes = AgentCatalog.specFor("dsh")!!.control.modes.map { it.value }
+        assertEquals(listOf("ptc", "standard", "minimal", "cordis"), dshModes)
+        val codex = AgentCatalog.specFor("codex")!!
+        assertTrue(codex.control.modes.any { it.value == "plan" })
+        assertTrue(codex.control.hasModel)
+        val agy = AgentCatalog.specFor("antigravity")!!
+        assertTrue(agy.control.modes.any { it.value == "plan" })
+        assertTrue(agy.control.hasModel)
+        assertTrue(agy.control.efforts.any { it.value == "high" })
+        assertEquals(ControlSpec.None, AgentCatalog.specFor("claude")!!.control)
+        assertEquals(ControlSpec.None, AgentCatalog.specFor("hermes")!!.control)
+    }
+
+    @Test
+    fun `bundleForMode maps unified modes to each harness real flags`() {
+        val a = AgentCatalog.ControlAdapter
+        // codex: PLAN -> collaboration_mode plan; CODE_EXECUTION -> full-network.
+        assertEquals(listOf("-c", "collaboration_mode=\"plan\""), a.argvFor("codex", a.bundleForMode("codex", AgentMode.PLAN)))
+        assertTrue(a.argvFor("codex", a.bundleForMode("codex", AgentMode.CODE_EXECUTION)).contains("--sandbox"))
+        // claude: code-exec -> bypass permissions + high effort (real flags).
+        assertEquals(
+            listOf("--effort", "high", "--dangerously-skip-permissions"),
+            a.argvFor("claude", a.bundleForMode("claude", AgentMode.CODE_EXECUTION)),
+        )
+        // antigravity: plan -> --mode plan + --effort medium (bundle sets effort).
+        assertEquals(
+            listOf("--mode", "plan", "--effort", "medium"),
+            a.argvFor("antigravity", a.bundleForMode("antigravity", AgentMode.PLAN)),
+        )
+        // dsh: preset path, no argv.
+        assertTrue(a.argvFor("dsh", a.bundleForMode("dsh", AgentMode.PLAN)).isEmpty())
     }
 }

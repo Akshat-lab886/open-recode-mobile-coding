@@ -5,6 +5,7 @@ import android.system.Os
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.data.AgentMode
+import com.dsh.mobile.data.ControlBundle
 import java.io.File
 import java.net.ServerSocket
 
@@ -53,6 +54,17 @@ object AgentRuntime {
 
     fun runtimeRoot(context: Context): File =
         File(context.filesDir, "dsh-runtime").apply { mkdirs() }
+
+    /**
+     * DSH's own home directory (`$DSH_HOME` / `~/.dsh`): `<filesDir>/dsh-runtime/.dsh`.
+     *
+     * This is where DSH reads `settings.yaml` (agent-presets.default, etc.).
+     * HOME is set to runtimeRoot (files/dsh-runtime), so DSH resolves `~/.dsh`
+     * to this directory - VERIFIED on device (settings.yaml lives at
+     * files/dsh-runtime/.dsh/settings.yaml).
+     */
+    fun dshHome(context: Context): File =
+        File(runtimeRoot(context), ".dsh").apply { mkdirs() }
 
     /**
      * Node binary **inside the rootfs** (host path).
@@ -189,6 +201,7 @@ object AgentRuntime {
         agent: ActiveAgent,
         workspace: File,
         port: Int,
+        control: ControlBundle = ControlBundle(),
     ): List<String> {
         val prootFile = File(runtimeRoot(context).absolutePath + "/proot")
         // PRoot is only usable together with the Alpine rootfs it unpacks.
@@ -201,7 +214,7 @@ object AgentRuntime {
         // APK's own bionic Node, so falling back natively is both correct and
         // the only thing that works until a rootfs actually exists.
         val rootfs = File(runtimeRoot(context).absolutePath + "/rootfs")
-        if (!prootFile.canExecute() || !rootfs.exists()) return buildArgv(agent, context, port)
+        if (!prootFile.canExecute() || !rootfs.exists()) return buildArgv(agent, context, port, control)
 
         // CRITICAL: inside PRoot the guest root IS the runtime root, so argv
         // must use guest paths. Passing host paths such as
@@ -216,6 +229,7 @@ object AgentRuntime {
                 nodePath = GUEST_NODE_PATH,
                 agentsDir = GUEST_AGENTS_DIR,
                 port = port,
+                control = control,
             )
     }
 
@@ -246,12 +260,13 @@ object AgentRuntime {
      */
     const val RESOLV_CONF_CONTENT = "nameserver 8.8.8.8\nnameserver 1.1.1.1\n"
 
-    private fun buildArgv(agent: ActiveAgent, context: Context, port: Int): List<String> =
+    private fun buildArgv(agent: ActiveAgent, context: Context, port: Int, control: ControlBundle = ControlBundle()): List<String> =
         buildArgv(
             agent = agent,
             nodePath = nodeBinary(context).absolutePath,
             agentsDir = agentsDir(context).absolutePath,
             port = port,
+            control = control,
         )
 
     /**
@@ -300,6 +315,7 @@ object AgentRuntime {
         nodePath: String,
         agentsDir: String,
         port: Int,
+        control: ControlBundle = ControlBundle(),
     ): List<String> = when (agent) {
         // DSH exposes the web server only through a PROFILE, not a
         // subcommand: `dsh web` is an unknown command. The profile is
@@ -366,6 +382,24 @@ object AgentRuntime {
         ActiveAgent.ANTIGRAVITY,
         -> {
             val spec = requireNotNull(agent.spec) { "no catalog entry for $agent" }
+            // Two launch strategies, both data-driven from the catalog:
+            //  - JS-shim agents (codex, claude): the npm `bin/X` shim carries a
+            //    `#!/usr/bin/env node` shebang that ENOENTs because libnode.so
+            //    is never on PATH as `node`. gatewayLaunch resolves the REAL JS
+            //    entry, launched THROUGH the bundled node interpreter. This is
+            //    the codex ENOENT fix.
+            //  - Native-binary agents (antigravity): a real ELF (PT_INTERP=
+            //    /system/bin/linker64, bionic-linked), no node involved. The
+            //    command is the binary path directly, so no shebang lookup.
+            val (command, extraArgs) = if (spec.gatewayLaunch != null) {
+                val launch = spec.gatewayLaunch
+                val script = File(agentsDir, launch.script).absolutePath
+                // gateway.js:  -- <cmd> [args...]  → spawn(cmd, args)
+                Pair(nodePath, listOf(script) + launch.argv)
+            } else {
+                // Native binary path — runs directly, no interpreter.
+                Pair(File(agentsDir, spec.relativeBinary).absolutePath, emptyList())
+            }
             listOf(
                 nodePath,
                 // Same reasoning as the DSH branch: an uncapped V8 heap on a
@@ -376,8 +410,8 @@ object AgentRuntime {
                 "--backend", requireNotNull(spec.gatewayBackend),
                 "--port", port.toString(),
                 "--host", LOOPBACK_HOST,
-                "--", File(agentsDir, spec.relativeBinary).absolutePath,
-            )
+                "--", command,
+            ) + extraArgs + AgentCatalog.ControlAdapter.argvFor(spec.id, control)
         }
         // NOT independently verified against the real `opencode serve
         // --help` — unlike the DSH branch, this one is carried over
@@ -460,6 +494,11 @@ object AgentRuntime {
     ): Map<String, String> = buildMap {
         putAll(apiEnv)
         put("DSH_WORKSPACE", workspace.absolutePath)
+        // Legacy/observability only: DSH does NOT read DSH_AGENT_MODE (grep the
+        // checkout finds zero references). DSH resolves its modes from
+        // settings.yaml's `agent-presets.default`, which writeDshPreset() writes
+        // before this process is spawned. Kept for any gateway backend that
+        // honors a similar convention; harmless for DSH.
         put("DSH_AGENT_MODE", mode.name)
         put("PORT", port.toString())
         put("HOST", LOOPBACK_HOST)

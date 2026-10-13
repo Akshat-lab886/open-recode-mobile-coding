@@ -14,6 +14,7 @@ import com.dsh.mobile.DshMobileApp
 import com.dsh.mobile.MainActivity
 import com.dsh.mobile.bootstrap.BootstrapManager
 import com.dsh.mobile.data.ActiveAgent
+import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.data.RuntimeConfig
 import com.dsh.mobile.proxy.VisualGateway
 import com.dsh.mobile.runtime.AgentModelSettings
@@ -313,6 +314,16 @@ private suspend fun isAlreadyServing(): Boolean {
                 }
                 val agent = runnable
                 Log.i(TAG, "boot: agent=${config.agent} -> $agent proot=${AgentRuntime.isProotActive(this@AgentRuntimeService)}")
+                // DSH reads its modes from settings.yaml (agent-presets.default),
+                // NOT from the DSH_AGENT_MODE env Mobile used to set (which DSH
+                // ignores entirely). Persist the user's chosen preset so the
+                // new session boots in it. A live session's preset is pinned, so
+                // mode changes also require the service restart below.
+                if (agent == ActiveAgent.DEEPSEEK_HARNESS) {
+                    val home = AgentRuntime.dshHome(this@AgentRuntimeService)
+                    val written = AgentCatalog.ControlAdapter.writeDshPreset(config.mode, home)
+                    if (written != null) Log.i(TAG, "boot: dsh preset=$written at settings.yaml in $home")
+                }
                 val workspace = resolveWorkspace(config)
                 val port = AgentRuntime.findFreePort(config.loopbackPort)
                 app.configStore.setPort(port)
@@ -366,6 +377,11 @@ private suspend fun isAlreadyServing(): Boolean {
                     agent = agent,
                     workspace = workspace,
                     port = port,
+                    // Maps the unified Mode (Settings picker) onto each harness's
+                    // REAL flags - e.g. PLAN -> codex collaboration_mode=plan,
+                    // CODE_EXECUTION -> codex sandbox-full + disable. DSH modes
+                    // are presets (settings.yaml, handled in the boot path), not argv.
+                    control = AgentCatalog.ControlAdapter.bundleForMode(agent.id, config.mode),
                 )
                 Log.i(TAG, "exec: ${command.joinToString(" ")}")
 

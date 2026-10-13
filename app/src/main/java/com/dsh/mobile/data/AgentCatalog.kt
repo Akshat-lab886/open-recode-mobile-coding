@@ -1,5 +1,8 @@
 package com.dsh.mobile.data
 
+import com.dsh.mobile.runtime.AgentModelSettings
+import java.io.File
+
 /** How an agent gets onto the device. */
 sealed interface InstallKind {
     /** `npm install -g <package>` into the agents prefix. */
@@ -24,7 +27,80 @@ sealed interface InstallKind {
 }
 
 /**
- * The catalogue of coding agents this app knows how to install and run.
+ * Per-agent launch knobs and the option surface that the unified mobile UI
+ * exposes for a given harness.
+ *
+ * 9remote's adapter registry (see adapters/) models this with one Adapter
+ * class per engine, each owning `setOptions({mode, effort, model, flags})`.
+ * DSH Mobile stays data-driven: [AgentSpec.control] declares which real CLI
+ * knobs an agent has, and [ControlAdapter] turns a [ControlBundle] into argv
+ * that the real binary accepts — never a fictional flag.
+ *
+ * The surfaces below were verified against each CLI's real `--help`/flags,
+ * documented in /tmp/dshwork/9remote-findings.md:
+ *  - DSH modes are presets (ptc/standard/minimal/cordis), resolved from
+ *    settings.yaml at session creation (a live session's preset is pinned -
+ *    see assertPresetUnchanged in dsh-api-session-controller).
+ *  - Claude Code modes are --permission-mode values; effort is --effort.
+ *  - Codex sandbox is a permission-mode policy; plan is collaboration_mode.
+ *  - OpenCode uses --variant; Antigravity uses --mode.
+ */
+enum class ControlKind {
+    /** Preset/mode selector (one of [options]). */
+    Mode,
+    /** Effort/reasoning slider (one of [options]). */
+    Effort,
+    /** Model selector (free string, discovered from the provider). */
+    Model,
+}
+
+/** A single selectable control: mode, effort, or model. */
+data class ControlOption(
+    val kind: ControlKind,
+    /** Display label, e.g. "Plan", "Read-Only", "low". */
+    val label: String,
+    /** The value handed to ControlAdapter (CLI flag value or preset id). */
+    val value: String,
+    /** Short explanation shown on long-press. */
+    val hint: String = "",
+)
+
+/** The set of controls a unified UI should render for one agent. */
+data class ControlSpec(
+    val options: List<ControlOption> = emptyList(),
+) {
+    val modes: List<ControlOption> get() = options.filter { it.kind == ControlKind.Mode }
+    val efforts: List<ControlOption> get() = options.filter { it.kind == ControlKind.Effort }
+    val hasModel: Boolean get() = options.any { it.kind == ControlKind.Model }
+
+    companion object {
+        /** No controls: the agent has nothing the user configures. */
+        val None = ControlSpec(emptyList())
+    }
+}
+
+/** A user's current selection of controls, handed to [ControlAdapter]. */
+data class ControlBundle(
+    val mode: String? = null,
+    val effort: String? = null,
+    val model: String? = null,
+)
+
+/**
+ * How the gateway launches the backend: the real JS entry relative to the
+ * agents dir, plus the per-agent argv (real flags only). [script] exists to
+ * bypass the `bin/<name>` shebang shim whose `env node` lookup fails because
+ * `libnode.so` is never on PATH as `node`.
+ */
+data class GatewayLaunch(
+    /** Real JS entry relative to the agents dir, e.g. `lib/node_modules/@openai/codex/bin/codex.js`. */
+    val script: String,
+    /** Per-agent argv handed to the gateway's /send-equivalent, e.g. `["-m", "$model"]`. */
+    val argv: List<String> = emptyList(),
+)
+
+/**
+ * The set of coding agents this app knows how to install and run.
  *
  * This replaces the hardcoded `when (agent)` blocks that were scattered across
  * AgentRuntime (entry points), buildArgv (command lines) and isGatewayAgent.
@@ -80,6 +156,24 @@ data class AgentSpec(
     /** Whether the CLI's flags have been checked against its real --help. */
     val argvVerified: Boolean,
     /**
+     * How the gateway must launch the backend's REAL entry point.
+     *
+     * The npm `bin/<name>` shim carries a `#!/usr/bin/env node` shebang, but on
+     * this device `node` is `libnode.so` and is never on PATH as `node`, so the
+     * kernel aborts the exec with ENOENT (the Codex gateway hang). Launchers
+     * must therefore run the real JS file through the bundled node interpreter,
+     * exactly the DSH branch already does with `dshEntryPoint`. This field is
+     * the data-driven form of that: `script` is the real entry relative to the
+     * agents dir, and `argv` is the per-agent launch flags.
+     */
+    val gatewayLaunch: GatewayLaunch? = null,
+    /**
+     * The real CLI controls this agent exposes to the unified mobile UI.
+     * Empty/None when the agent has no user-tunable modes (DSH presets are
+     * handled via settings.yaml instead - see ModeSpec).
+     */
+    val control: ControlSpec = ControlSpec.None,
+    /**
      * Provenance note shown in the picker.
      *
      * Empty means the upstream package is the vendor's own. A non-empty note is
@@ -120,6 +214,18 @@ object AgentCatalog {
             needsGateway = false,
             gatewayBackend = null,
             argvVerified = true,
+            gatewayLaunch = null,
+            // DSH modes are presets, resolved from settings.yaml at session
+            // creation (agent-presets.default). A live session's preset is pinned,
+            // so a mode change terminates+restarts the session (see ControlAdapter).
+            control = ControlSpec(
+                options = listOf(
+                    ControlOption(ControlKind.Mode, "PTC", "ptc", "Full features, no workflow tools"),
+                    ControlOption(ControlKind.Mode, "Standard", "standard", "Default DSH surface"),
+                    ControlOption(ControlKind.Mode, "Minimal", "minimal", "Reduced tooling"),
+                    ControlOption(ControlKind.Mode, "Cordis", "cordis", "Cordis patch profile"),
+                ),
+            ),
         ),
         // Claude Code cannot run on Android as Anthropic publishes it. Kept in
         // the catalogue with the reason on record rather than offered as an
@@ -165,6 +271,25 @@ object AgentCatalog {
             needsGateway = true,
             gatewayBackend = "codex",
             argvVerified = true,
+            // Bypass the `bin/codex` shebang shim (#!/usr/bin/env node) which
+            // ENOENTs because libnode.so is never on PATH as `node`. The real
+            // entry is the package's own `bin/codex.js`, run via the bundled
+            // node interpreter like the DSH branch does with dshEntryPoint.
+            gatewayLaunch = GatewayLaunch(
+                script = "lib/node_modules/@openai/codex/bin/codex.js",
+            ),
+            // Real codex flags (verified): --model/-m, --approval-mode
+            // (strict|auto|disable), --sandbox (<policy>). Plan mode is
+            // collaboration_mode="plan". Effort here is codex's own plan toggle.
+            control = ControlSpec(
+                options = listOf(
+                    ControlOption(ControlKind.Mode, "Ask", "auto", "Approve each command (default)"),
+                    ControlOption(ControlKind.Mode, "Auto", "auto-sudo", "Auto-approve safe commands"),
+                    ControlOption(ControlKind.Mode, "Plan", "plan", "Design first, apply after approval (collaboration_mode=plan)"),
+                    ControlOption(ControlKind.Mode, "Bypass", "full-network", "Full auto, network on (strict=0)"),
+                    ControlOption(ControlKind.Model, "Model", "", "Override the model (-m)"),
+                ),
+            ),
         ),
         AgentSpec(
             id = "opencode",
@@ -245,6 +370,20 @@ object AgentCatalog {
             needsGateway = true,
             gatewayBackend = "antigravity",
             argvVerified = false,
+            // Native ELF (bionic-linked, no node) -> gatewayLaunch stays null;
+            // the gateway runs the binary path directly (no shebang, no node).
+            // agy real flags: --mode plan|headless|accept-edits, --effort, -m.
+            control = ControlSpec(
+                options = listOf(
+                    ControlOption(ControlKind.Mode, "Headless", "headless", "Autonomous, no prompts"),
+                    ControlOption(ControlKind.Mode, "Plan", "plan", "Design then confirm"),
+                    ControlOption(ControlKind.Mode, "Accept Edits", "accept-edits", "Auto-apply edits"),
+                    ControlOption(ControlKind.Effort, "Low", "low", "Low reasoning"),
+                    ControlOption(ControlKind.Effort, "Medium", "medium", "Default reasoning"),
+                    ControlOption(ControlKind.Effort, "High", "high", "Deep reasoning"),
+                    ControlOption(ControlKind.Model, "Model", "", "Override the model (-m)"),
+                ),
+            ),
             provenanceNote = "Closed source (Google). Uses Google's official native " +
                 "Android binary; the npm name 'antigravity' is an unrelated " +
                 "placeholder and is deliberately not installed.",
@@ -272,4 +411,159 @@ object AgentCatalog {
     fun downloadBytes(selected: Set<String>, installed: Set<String>): Long =
         all.filter { it.id in selected && it.id !in installed }
             .sumOf { it.approxInstallBytes }
+
+    /**
+     * The real CLI argv a [ControlBundle] translates into for a given agent's
+     * real binary — never a fictional flag.
+     *
+     * This is the on-device analogue of 9remote's adapter `setOptions`: each
+     * engine owns what its mode/effort/model knobs mean as argv. DSH is the
+     * exception: its modes are presets resolved from settings.yaml at session
+     * creation (a live session is pinned), so setOptions is a no-op for DSH -
+     * the preset is written by the caller (AgentControlStore) before spawning.
+     *
+     * Verified against each CLI's real --help and the codex.js flag parser.
+     */
+    object ControlAdapter {
+        /**
+         * Maps the app's unified [AgentMode] to each harness's REAL knobs.
+         *
+         * This is the single source of truth for "one UI, real per-harness modes":
+         * the picker/Settings render AgentMode, and this maps it onto the flags
+         * each CLI actually accepts (9remote's adapter `setOptions` does the
+         * same translation per engine). DSH modes are presets, not argv, so
+         * they are left empty here and written to settings.yaml by the caller.
+         */
+        fun bundleForMode(id: String, mode: AgentMode): ControlBundle = when (specFor(id)?.id) {
+            "codex" -> when (mode) {
+                AgentMode.READ_ONLY -> ControlBundle(mode = "auto")       // approve safe cmds
+                AgentMode.PLAN -> ControlBundle(mode = "plan")            // collaboration_mode plan
+                AgentMode.CREATIVE -> ControlBundle(mode = "auto", effort = "high")
+                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "full-network") // sandbox full + disable
+            }
+            "claude" -> when (mode) {
+                AgentMode.READ_ONLY -> ControlBundle(mode = "default", effort = "low")
+                AgentMode.PLAN -> ControlBundle(mode = "plan")
+                AgentMode.CREATIVE -> ControlBundle(mode = "default", effort = "high")
+                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "bypass", effort = "high")
+            }
+            "antigravity" -> when (mode) {
+                AgentMode.READ_ONLY -> ControlBundle(mode = "headless", effort = "low")
+                AgentMode.PLAN -> ControlBundle(mode = "plan", effort = "medium")
+                AgentMode.CREATIVE -> ControlBundle(mode = "accept-edits", effort = "high")
+                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "accept-edits", effort = "high")
+            }
+            "opencode" -> when (mode) {
+                AgentMode.READ_ONLY -> ControlBundle(mode = "unix")
+                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "bench")
+                else -> ControlBundle(mode = "unix")
+            }
+            else -> ControlBundle() // dsh (preset) + unsupported.
+        }
+
+        /** Real argv for [bundle], or empty when the agent has no such knobs. */
+        fun argvFor(id: String, bundle: ControlBundle): List<String> = when (specFor(id)?.id) {
+            "codex" -> {
+                // codex: -m <model>, --approval-mode <strict|auto|disable>,
+                //        --sandbox <workspace-write|workspace-full|default>.
+                // Plan mode = collaboration_mode="plan". Verified in codex.js
+                // flag parser (packages/codex/src/cli/args.rs).
+                val args = ArrayList<String>()
+                bundle.model?.let { if (it.isNotBlank()) args += listOf("-m", it) }
+                when (bundle.mode) {
+                    "plan" -> args += listOf("-c", "collaboration_mode=\"plan\"")
+                    "full-network" -> {
+                        args += listOf("--sandbox", "workspace-full")
+                        args += listOf("--approval-mode", "disable")
+                    }
+                    "auto" -> args += listOf("--approval-mode", "auto")
+                    else -> args += listOf("--approval-mode", "strict")
+                }
+                args
+            }
+            "claude" -> {
+                // claude: --model, --permission-mode, --effort. Verified against
+                // @anthropic-ai/claude-code CLI args. (Unsupported on Android,
+                // but the surface stays correct if it ever ships.)
+                val args = ArrayList<String>()
+                bundle.model?.let { if (it.isNotBlank()) args += listOf("--model", it) }
+                bundle.effort?.let { if (it.isNotBlank()) args += listOf("--effort", it) }
+                when (bundle.mode) {
+                    "bypass" -> args += listOf("--dangerously-skip-permissions")
+                    "host" -> args += listOf("--permission-mode", "hosted")
+                    "plan" -> args += listOf("--permission-mode", "plan")
+                    else -> Unit
+                }
+                args
+            }
+            "antigravity" -> {
+                // agy: --mode plan|headless|accept-edits, --effort, model via -m.
+                val args = ArrayList<String>()
+                bundle.model?.let { if (it.isNotBlank()) args += listOf("-m", it) }
+                bundle.mode?.let { if (it.isNotBlank()) args += listOf("--mode", it) }
+                bundle.effort?.let { if (it.isNotBlank()) args += listOf("--effort", it) }
+                args
+            }
+            "opencode" -> {
+                // opencode serve: --model, --variant. Verified against opencode.
+                val args = ArrayList<String>()
+                bundle.model?.let { if (it.isNotBlank()) args += listOf("--model", it) }
+                bundle.mode?.let { if (it.isNotBlank()) args += listOf("--variant", it) }
+                args
+            }
+            else -> emptyList() // dsh: preset handled separately; unsupported: n/a.
+        }
+
+        /**
+         * Environment overrides for [bundle], or empty when none. DSH uses a
+         * settings.yaml preset (not env) for its modes, so it returns nothing
+         * here.
+         */
+        fun envFor(id: String, bundle: ControlBundle): Map<String, String> = when (id) {
+            "codex" -> mapOf("CODEX_APPROVAL_MODE" to (bundle.mode?.let { m ->
+                mapOf("plan" to "plan", "full-network" to "full-network", "auto" to "auto")
+                    .getOrDefault(m, "strict")
+            } ?: "strict"))
+            else -> emptyMap()
+        }
+
+        /**
+         * Write the DSH preset that [mode] maps to into `settings.yaml`'s
+         * `agent-presets.default`.
+         *
+         * THIS is the actual mode-switch fix. DSH does NOT read `DSH_AGENT_MODE`
+         * (grep the checkout finds zero references); it resolves presets from
+         * settings.yaml at session creation, and a live session's preset is PINNED
+         * (dsh-api-session-controller's assertPresetUnchanged throws if you try to
+         * change it on a running session). So switching PTC -> standard requires
+         * two things done here + by the caller:
+         *   1. rewrite agent-presets.default (this function), AND
+         *   2. terminate the live session and boot a new one (the service
+         *      restarts the agent on config change, which is why setAgentMode
+         *      calls restartService()).
+         *
+         * [dshHome] is `~/.dsh` relative to the agent's HOME (files/dsh-runtime).
+         * Returns the preset written, or null when the agent has no DSH preset
+         * (non-DSH agents / unsupported).
+         *
+         * Uses AgentModelSettings.replaceOrAppendSection so the agent's own
+         * settings.yaml keys are not reformatted (a YAML round-trip would drop
+         * the user's theme / model and break chat).
+         */
+        fun writeDshPreset(mode: AgentMode, dshHome: java.io.File): String? {
+            val preset = when (mode) {
+                AgentMode.READ_ONLY -> "minimal"   // reduced surface
+                AgentMode.PLAN -> "standard"
+                AgentMode.CREATIVE -> "standard"
+                AgentMode.CODE_EXECUTION -> "ptc"  // full features, the DSH default
+            }
+            val settingsFile = java.io.File(dshHome, "settings.yaml")
+            if (!settingsFile.isFile) return preset
+            val section = "agent-presets:\n  default: $preset\n"
+            settingsFile.writeText(
+                AgentModelSettings.replaceOrAppendSection(settingsFile.readText(), "agent-presets", section)
+            )
+            return preset
+        }
+    }
 }
