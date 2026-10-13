@@ -113,6 +113,9 @@ class MainActivity : ComponentActivity() {
                             // Dismissing without choosing still counts as an
                             // answer: it must not re-prompt on every launch.
                             showPicker.value = false
+                            app.agentInstallScope.launch {
+                                app.agentInstalls.recordSelection(emptySet())
+                            }
                         },
                         sheetState = sheetState,
                     ) {
@@ -121,6 +124,9 @@ class MainActivity : ComponentActivity() {
                             installedIds = installedIds,
                             onSkip = {
                                 showPicker.value = false
+                                app.agentInstallScope.launch {
+                                    app.agentInstalls.recordSelection(emptySet())
+                                }
                             },
                             onConfirm = { chosen ->
                                 showPicker.value = false
@@ -222,21 +228,22 @@ class MainActivity : ComponentActivity() {
      * failure never causes a later app open to reinstall the ones that worked.
      */
     private fun installAgents(app: DshMobileApp, chosen: Set<String>) {
-        if (chosen.isEmpty()) return
         (application as DshMobileApp).agentInstallScope.launch {
-            val installer = app.agentInstaller
-            val specs = AgentCatalog.all.filter { it.id in chosen }
-            val pending = installer.pending(chosen, app.agentInstalls.completed.first())
-            Log.i(TAG, "installing ${pending.size} of ${specs.size} selected agents")
-            installer.installAll(pending).forEach { result ->
-                if (result.ok) {
-                    app.agentInstalls.markCompleted(result.spec.id)
-                    Log.i(TAG, "installed ${result.spec.id}")
-                } else {
-                    // The reason is what makes a failure debuggable at all;
-                    // npm's own last lines are the only evidence there is.
-                    Log.w(TAG, "install failed ${result.spec.id}: ${result.failure}")
-                    Log.w(TAG, "install output for ${result.spec.id}:\n${result.output}")
+            if (chosen.isNotEmpty()) {
+                val installer = app.agentInstaller
+                val specs = AgentCatalog.all.filter { it.id in chosen }
+                val pending = installer.pending(chosen, app.agentInstalls.completed.first())
+                Log.i(TAG, "installing ${pending.size} of ${specs.size} selected agents")
+                installer.installAll(pending).forEach { result ->
+                    if (result.ok) {
+                        app.agentInstalls.markCompleted(result.spec.id)
+                        Log.i(TAG, "installed ${result.spec.id}")
+                    } else {
+                        // The reason is what makes a failure debuggable at all;
+                        // npm's own last lines are the only evidence there is.
+                        Log.w(TAG, "install failed ${result.spec.id}: ${result.failure}")
+                        Log.w(TAG, "install output for ${result.spec.id}:\n${result.output}")
+                    }
                 }
             }
             app.agentInstalls.recordSelection(chosen)

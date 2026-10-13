@@ -260,4 +260,16 @@ object AgentCatalog {
 
     /** Total on-device cost of installing every agent, for the picker summary. */
     val totalInstallBytes: Long get() = all.sumOf { it.approxInstallBytes }
+
+    /**
+     * Bytes the picker must charge against the user's storage for a selection.
+     *
+     * Only agents that are both selected AND not yet on disk count toward the
+     * download total. Billed the size of an agent the user already installed is
+     * the "Install 2 / 480 MB" lie - it claims a cost that will never be paid
+     * and re-scared people away from installing the rest.
+     */
+    fun downloadBytes(selected: Set<String>, installed: Set<String>): Long =
+        all.filter { it.id in selected && it.id !in installed }
+            .sumOf { it.approxInstallBytes }
 }

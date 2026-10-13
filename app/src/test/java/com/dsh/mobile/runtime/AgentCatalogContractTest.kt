@@ -203,4 +203,18 @@ class AgentCatalogContractTest {
             )
         }
     }
+
+    @Test
+    fun `download size only charges agents not yet installed`() {
+        assertEquals(0L, AgentCatalog.downloadBytes(setOf("codex"), setOf("codex")))
+        assertEquals(
+            AgentCatalog.specFor("dsh")!!.approxInstallBytes,
+            AgentCatalog.downloadBytes(setOf("codex", "dsh"), setOf("codex")),
+        )
+        assertEquals(
+            AgentCatalog.specFor("opencode")!!.approxInstallBytes +
+                AgentCatalog.specFor("antigravity")!!.approxInstallBytes,
+            AgentCatalog.downloadBytes(setOf("opencode", "antigravity"), emptySet()),
+        )
+    }
 }

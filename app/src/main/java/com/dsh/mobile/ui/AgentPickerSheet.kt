@@ -57,10 +57,11 @@ fun AgentPickerSheet(
     // DeepSeek Harness is the app's own harness and is already bundled into the
     // runtime, so it is offered but not charged to the user's storage budget.
     var selected by rememberSaveable {
-        mutableStateOf(specs.map { it.id }.toMutableSet())
+        mutableStateOf(installedIds.ifEmpty { setOf("dsh") }.toMutableSet())
     }
 
-    val totalBytes = specs.filter { it.id in selected }.sumOf { it.approxInstallBytes }
+    val toInstall = selected.filter { it !in installedIds }
+    val totalBytes = specs.filter { it.id in toInstall }.sumOf { it.approxInstallBytes }
 
     Column(
         modifier = modifier
@@ -104,7 +105,7 @@ fun AgentPickerSheet(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "Downloads ${formatBytes(totalBytes)}",
+                if (toInstall.isEmpty()) "All selected agents are ready" else "Downloads ${formatBytes(totalBytes)}",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -122,7 +123,7 @@ fun AgentPickerSheet(
             androidx.compose.material3.Button(
                 onClick = { onConfirm(selected.toSet()) },
                 modifier = Modifier.heightIn(min = tokens.minTouchTarget),
-            ) { Text("Install ${selected.size}") }
+            ) { Text(if (toInstall.isEmpty()) "Done" else "Install ${toInstall.size}") }
         }
         Text(
             "Installed agents stay on this device until you remove them.",
