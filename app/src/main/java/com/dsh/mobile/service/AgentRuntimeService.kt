@@ -381,7 +381,9 @@ private suspend fun isAlreadyServing(): Boolean {
                     // REAL flags - e.g. PLAN -> codex collaboration_mode=plan,
                     // CODE_EXECUTION -> codex sandbox-full + disable. DSH modes
                     // are presets (settings.yaml, handled in the boot path), not argv.
-                    control = AgentCatalog.ControlAdapter.bundleForMode(agent.id, config.mode),
+                    control = AgentCatalog.ControlAdapter.bundleForMode(
+                        agent.id, config.mode, config.effort,
+                    ),
                 )
                 Log.i(TAG, "exec: ${command.joinToString(" ")}")
 

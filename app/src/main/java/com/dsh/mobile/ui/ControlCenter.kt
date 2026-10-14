@@ -74,6 +74,7 @@ fun ControlCenterContent(
     onCredentialsSaved: (deepseek: String, anthropic: String, openrouter: String) -> Unit,
     onWorkspacePicked: (String) -> Unit,
     onModeSelected: (AgentMode) -> Unit,
+    onEffortSelected: (String) -> Unit,
     onAgentSelected: (ActiveAgent) -> Unit,
     onManageAgents: () -> Unit,
     /** Sessions recorded on this device; the user owns and can remove them. */
@@ -142,13 +143,19 @@ fun ControlCenterContent(
             onPicked = onWorkspacePicked,
         )
 
-        // -- c) mode ---------------------------------------------------------
-        SectionHeader(
-            title = "Agent mode",
-            icon = Icons.Default.Tune,
-            subtitle = "How much the agent may do without asking.",
-        )
-        ModeSelector(selected = uiState.config.mode, onSelected = onModeSelected)
+         // -- c) mode / effort (real per-harness controls, not a fake global enum)
+         SectionHeader(
+             title = "Mode & effort",
+             icon = Icons.Default.Tune,
+             subtitle = "Reflects whatever harness is active.",
+         )
+         AgentControlPanel(
+             agent = uiState.config.agent,
+             selectedMode = uiState.config.mode,
+             onModeSelected = onModeSelected,
+             onEffortSelected = onEffortSelected,
+             modifier = Modifier.fillMaxWidth(),
+         )
 
         // -- d) backend ------------------------------------------------------
         SectionHeader(
@@ -366,50 +373,6 @@ private fun WorkspacePicker(
                 .fillMaxWidth()
                 .heightIn(min = tokens.minTouchTarget),
         ) { Text("Choose project folder") }
-    }
-}
-
-@Composable
-private fun ModeSelector(
-    selected: AgentMode,
-    onSelected: (AgentMode) -> Unit,
-) {
-    val tokens = DshTheme.tokens
-    PanelCard {
-        AgentMode.entries.forEach { mode ->
-            val isSelected = selected == mode
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .selectable(
-                        selected = isSelected,
-                        onClick = { onSelected(mode) },
-                        role = Role.RadioButton,
-                    )
-                    .heightIn(min = tokens.minTouchTarget)
-                    .padding(vertical = tokens.spaceSm),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = isSelected, onClick = { onSelected(mode) })
-                Spacer(Modifier.width(tokens.spaceSm))
-                Column {
-                    Text(
-                        mode.label,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                    )
-                    Text(
-                        mode.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
     }
 }
 

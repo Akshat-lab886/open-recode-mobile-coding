@@ -93,20 +93,6 @@ internal object AgentModelSettings {
         "deepseek-flash",
     )
 
-    /**
-     * The settings.yaml body for [model].
-     *
-     * Written as a literal rather than round-tripped through a YAML library:
-     * this file is appended to a document the agent owns, and a parser/emit
-     * cycle would reorder and rewrite every key the agent wrote - including
-     * the user's own theme and agent presets.
-     */
-    fun renderYamlSection(provider: String, model: String): String =
-        """
-        agent-default-model:
-          provider: $provider
-          model: $model
-        """.trimIndent() + "\n"
 
     /**
      * Remove any user-layer [SECTION] override from [settingsFile].

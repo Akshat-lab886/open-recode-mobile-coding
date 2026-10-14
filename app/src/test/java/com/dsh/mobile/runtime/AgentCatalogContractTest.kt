@@ -8,6 +8,7 @@ import com.dsh.mobile.data.ControlSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -293,5 +294,33 @@ class AgentCatalogContractTest {
         )
         // dsh: preset path, no argv.
         assertTrue(a.argvFor("dsh", a.bundleForMode("dsh", AgentMode.PLAN)).isEmpty())
+    }
+
+    @Test
+    fun `bundleForMode effort override is independent of mode`() {
+        val a = AgentCatalog.ControlAdapter
+        // claude PLAN has no effort by default (null); override forces --effort low.
+        assertNull(a.bundleForMode("claude", AgentMode.PLAN).effort)
+        assertEquals("low", a.bundleForMode("claude", AgentMode.PLAN, effort = "low").effort)
+        // argv reflects the override, not the mode-derived default.
+        assertEquals(
+            listOf("--effort", "low", "--permission-mode", "plan"),
+            a.argvFor("claude", a.bundleForMode("claude", AgentMode.PLAN, effort = "low")),
+        )
+    }
+
+    @Test
+    fun `DSH mode round-trips through presets and CREATIVE maps to cordis`() {
+        val a = AgentCatalog.ControlAdapter
+        val dsh = ActiveAgent.DEEPSEEK_HARNESS
+        assertEquals("ptc", a.modeFor(dsh, AgentMode.CODE_EXECUTION))
+        assertEquals("standard", a.modeFor(dsh, AgentMode.PLAN))
+        assertEquals("minimal", a.modeFor(dsh, AgentMode.READ_ONLY))
+        assertEquals("cordis", a.modeFor(dsh, AgentMode.CREATIVE))
+        // Inverse round-trips for every preset.
+        assertEquals(AgentMode.CODE_EXECUTION, a.modeFor(dsh, "ptc"))
+        assertEquals(AgentMode.PLAN, a.modeFor(dsh, "standard"))
+        assertEquals(AgentMode.READ_ONLY, a.modeFor(dsh, "minimal"))
+        assertEquals(AgentMode.CREATIVE, a.modeFor(dsh, "cordis"))
     }
 }

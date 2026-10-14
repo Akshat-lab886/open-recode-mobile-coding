@@ -218,6 +218,13 @@ class ControlCenterViewModel(
         }
     }
 
+    fun setAgentEffort(effort: String) {
+        viewModelScope.launch {
+            configStore.setEffort(effort)
+            restartService()
+        }
+    }
+
     fun setActiveAgent(agent: ActiveAgent) {
         viewModelScope.launch {
             configStore.setAgent(agent)

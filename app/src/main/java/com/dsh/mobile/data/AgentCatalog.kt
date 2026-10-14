@@ -173,6 +173,10 @@ data class AgentSpec(
      * handled via settings.yaml instead - see ModeSpec).
      */
     val control: ControlSpec = ControlSpec.None,
+    /** Short subtitle for the mode control row. */
+    val modeSubtitle: String = "Controls this agent's permission/sandbox behavior.",
+    /** Short subtitle for the effort control row. */
+    val effortSubtitle: String = "How much reasoning the agent spends.",
     /**
      * Provenance note shown in the picker.
      *
@@ -425,40 +429,76 @@ object AgentCatalog {
      * Verified against each CLI's real --help and the codex.js flag parser.
      */
     object ControlAdapter {
+        /** Maps the app's unified [AgentMode] to DSH's `agent-presets.default`. */
+        private fun dshPresetFor(mode: AgentMode): String = when (mode) {
+            AgentMode.READ_ONLY -> "minimal"
+            AgentMode.PLAN -> "standard"
+            AgentMode.CREATIVE -> "cordis"
+            AgentMode.CODE_EXECUTION -> "ptc"
+        }
+
         /**
-         * Maps the app's unified [AgentMode] to each harness's REAL knobs.
-         *
-         * This is the single source of truth for "one UI, real per-harness modes":
-         * the picker/Settings render AgentMode, and this maps it onto the flags
-         * each CLI actually accepts (9remote's adapter `setOptions` does the
-         * same translation per engine). DSH modes are presets, not argv, so
-         * they are left empty here and written to settings.yaml by the caller.
+         * The control-value string this [mode] maps to for [agent], to
+         * pre-select the UI chip. Returns "" when there are no mode options.
          */
-        fun bundleForMode(id: String, mode: AgentMode): ControlBundle = when (specFor(id)?.id) {
-            "codex" -> when (mode) {
-                AgentMode.READ_ONLY -> ControlBundle(mode = "auto")       // approve safe cmds
-                AgentMode.PLAN -> ControlBundle(mode = "plan")            // collaboration_mode plan
-                AgentMode.CREATIVE -> ControlBundle(mode = "auto", effort = "high")
-                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "full-network") // sandbox full + disable
+        fun modeFor(agent: ActiveAgent, mode: AgentMode): String {
+            val modes = agent.spec?.control?.modes ?: return ""
+            return if (agent.id == "dsh") dshPresetFor(mode)
+            else bundleForMode(agent.id, mode).mode ?: modes.first().value
+        }
+
+        /** Inverse: control-value string -> unified AgentMode, for onModeSelected. */
+        fun modeFor(agent: ActiveAgent, value: String): AgentMode = when (agent.id) {
+            "dsh" -> when (value) {
+                "ptc" -> AgentMode.CODE_EXECUTION
+                "standard" -> AgentMode.PLAN
+                "minimal" -> AgentMode.READ_ONLY
+                "cordis" -> AgentMode.CREATIVE
+                else -> AgentMode.CODE_EXECUTION
             }
-            "claude" -> when (mode) {
-                AgentMode.READ_ONLY -> ControlBundle(mode = "default", effort = "low")
-                AgentMode.PLAN -> ControlBundle(mode = "plan")
-                AgentMode.CREATIVE -> ControlBundle(mode = "default", effort = "high")
-                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "bypass", effort = "high")
+            else -> when (value) {
+                "plan", "bypass", "accept-edits" -> AgentMode.PLAN
+                "headless", "auto", "default", "host" -> AgentMode.READ_ONLY
+                "full-network" -> AgentMode.CODE_EXECUTION
+                else -> AgentMode.CODE_EXECUTION
             }
-            "antigravity" -> when (mode) {
-                AgentMode.READ_ONLY -> ControlBundle(mode = "headless", effort = "low")
-                AgentMode.PLAN -> ControlBundle(mode = "plan", effort = "medium")
-                AgentMode.CREATIVE -> ControlBundle(mode = "accept-edits", effort = "high")
-                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "accept-edits", effort = "high")
+        }
+
+        /**
+         * Maps the unified [mode] to this harness's real knobs, with an optional
+         * [effort] override (from the independent effort chip). When [effort] is
+         * non-null it replaces the effort implied by [mode], so claude/codex/
+         * antigravity keep effort as a first-class MH-style control that lives
+         * independently of permission/variant.
+         */
+        fun bundleForMode(id: String, mode: AgentMode, effort: String? = null): ControlBundle {
+            val base = when (specFor(id)?.id) {
+                "codex" -> when (mode) {
+                    AgentMode.READ_ONLY -> ControlBundle(mode = "auto")
+                    AgentMode.PLAN -> ControlBundle(mode = "plan")
+                    AgentMode.CREATIVE -> ControlBundle(mode = "auto", effort = "high")
+                    AgentMode.CODE_EXECUTION -> ControlBundle(mode = "full-network")
+                }
+                "claude" -> when (mode) {
+                    AgentMode.READ_ONLY -> ControlBundle(mode = "default", effort = "low")
+                    AgentMode.PLAN -> ControlBundle(mode = "plan")
+                    AgentMode.CREATIVE -> ControlBundle(mode = "default", effort = "high")
+                    AgentMode.CODE_EXECUTION -> ControlBundle(mode = "bypass", effort = "high")
+                }
+                "antigravity" -> when (mode) {
+                    AgentMode.READ_ONLY -> ControlBundle(mode = "headless", effort = "low")
+                    AgentMode.PLAN -> ControlBundle(mode = "plan", effort = "medium")
+                    AgentMode.CREATIVE -> ControlBundle(mode = "accept-edits", effort = "high")
+                    AgentMode.CODE_EXECUTION -> ControlBundle(mode = "accept-edits", effort = "high")
+                }
+                "opencode" -> when (mode) {
+                    AgentMode.READ_ONLY -> ControlBundle(mode = "unix")
+                    AgentMode.CODE_EXECUTION -> ControlBundle(mode = "bench")
+                    else -> ControlBundle(mode = "unix")
+                }
+                else -> ControlBundle() // dsh (preset) + unsupported.
             }
-            "opencode" -> when (mode) {
-                AgentMode.READ_ONLY -> ControlBundle(mode = "unix")
-                AgentMode.CODE_EXECUTION -> ControlBundle(mode = "bench")
-                else -> ControlBundle(mode = "unix")
-            }
-            else -> ControlBundle() // dsh (preset) + unsupported.
+            return if (effort != null) base.copy(effort = effort) else base
         }
 
         /** Real argv for [bundle], or empty when the agent has no such knobs. */
@@ -551,12 +591,7 @@ object AgentCatalog {
          * the user's theme / model and break chat).
          */
         fun writeDshPreset(mode: AgentMode, dshHome: java.io.File): String? {
-            val preset = when (mode) {
-                AgentMode.READ_ONLY -> "minimal"   // reduced surface
-                AgentMode.PLAN -> "standard"
-                AgentMode.CREATIVE -> "standard"
-                AgentMode.CODE_EXECUTION -> "ptc"  // full features, the DSH default
-            }
+            val preset = dshPresetFor(mode)
             val settingsFile = java.io.File(dshHome, "settings.yaml")
             if (!settingsFile.isFile) return preset
             val section = "agent-presets:\n  default: $preset\n"

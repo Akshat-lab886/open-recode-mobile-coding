@@ -71,6 +71,8 @@ data class RuntimeConfig(
     val mode: AgentMode = AgentMode.CODE_EXECUTION,
     val agent: ActiveAgent = ActiveAgent.DEEPSEEK_HARNESS,
     val loopbackPort: Int = ActiveAgent.DEEPSEEK_HARNESS.defaultPort,
+    /** Independent effort override for harnesses with an effort knob. Null = use mode-derived default. */
+    val effort: String? = null,
 )
 
 class RuntimeConfigStore(private val context: Context) {
@@ -80,6 +82,7 @@ class RuntimeConfigStore(private val context: Context) {
         val MODE = stringPreferencesKey("agent_mode")
         val AGENT = stringPreferencesKey("active_agent")
         val PORT = stringPreferencesKey("loopback_port")
+        val EFFORT = stringPreferencesKey("agent_effort")
     }
 
     val config: Flow<RuntimeConfig> = context.runtimeDataStore.data.map { prefs ->
@@ -91,6 +94,7 @@ class RuntimeConfigStore(private val context: Context) {
                 ?: ActiveAgent.DEEPSEEK_HARNESS,
             loopbackPort = prefs[Keys.PORT]?.toIntOrNull()
                 ?: ActiveAgent.DEEPSEEK_HARNESS.defaultPort,
+            effort = prefs[Keys.EFFORT],
         )
     }
 
@@ -102,6 +106,10 @@ class RuntimeConfigStore(private val context: Context) {
 
     suspend fun setMode(mode: AgentMode) {
         context.runtimeDataStore.edit { it[Keys.MODE] = mode.name }
+    }
+
+    suspend fun setEffort(effort: String) {
+        context.runtimeDataStore.edit { it[Keys.EFFORT] = effort }
     }
 
     suspend fun setAgent(agent: ActiveAgent) {

@@ -157,6 +157,7 @@ class MainActivity : ComponentActivity() {
                         onCredentialsSaved = vm::saveCredentials,
                         onWorkspacePicked = vm::setWorkspace,
                         onModeSelected = vm::setAgentMode,
+                        onEffortSelected = vm::setAgentEffort,
                         onAgentSelected = vm::setActiveAgent,
                         onManageAgents = { showPicker.value = true },
                         sessions = app.sessionHistory.history(),
