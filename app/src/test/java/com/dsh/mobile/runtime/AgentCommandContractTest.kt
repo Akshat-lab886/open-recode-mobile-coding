@@ -1,6 +1,7 @@
 package com.dsh.mobile.runtime
 
 import com.dsh.mobile.data.ActiveAgent
+import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.data.AgentMode
 import java.io.File
 import java.nio.file.Files
@@ -235,6 +236,46 @@ private val dshAllowedOptions = setOf(
 
     private fun dshArgvFor(agent: ActiveAgent): List<String> =
         AgentRuntime.buildArgv(agent, node, agents, port)
+
+    @Test
+    fun `antigravity launches its native ELF binary directly after --`() {
+        // antigravity is a bionic-native ELF (gatewayLaunch==null, relativeBinary
+        // = agy/bin/agy). Unlike codex/claude it must NOT be run through node as
+        // the backend command: the gateway execs the binary path itself, so the
+        // path after `--` is the raw ELF, not a .js file.
+        val argv = AgentRuntime.buildArgv(
+            agent = ActiveAgent.ANTIGRAVITY,
+            nodePath = node,
+            agentsDir = agents,
+            port = port,
+            control = AgentCatalog.ControlAdapter.bundleForMode(
+                "antigravity", AgentMode.PLAN,
+            ),
+        )
+        // Gateway wrapper, heap-capped like every backend.
+        assertTrue(argv.any { it.endsWith("visual-gateway/gateway.js") })
+        assertTrue(argv.any { it.startsWith("--max-old-space-size=") })
+        assertEquals("antigravity", argv[argv.indexOf("--backend") + 1])
+        assertEquals("$port", argv[argv.indexOf("--port") + 1])
+        assertEquals("127.0.0.1", argv[argv.indexOf("--host") + 1])
+        // Native binary, not a .js entry: the bug this pins down is routing the
+        // ELF through `node codex.js`-style launch and getting a "cannot execute
+        // binary" abort. The post-`--` command is the binary path verbatim.
+        val sep = argv.indexOf("--")
+        assertTrue("-- separator must gate the backend command", sep >= 0)
+        val binary = argv[sep + 1]
+        assertTrue(
+            "backend command must be the native ELF, not a .js script: $binary",
+            binary.endsWith("agy/bin/agy"),
+        )
+        assertFalse(
+            "native ELF must not be wrapped in node: $argv",
+            binary.endsWith(".js"),
+        )
+        // PLAN -> mode=plan, effort=medium, surfaced as real agy flags.
+        assertEquals("plan", argv[argv.indexOf("--mode") + 1])
+        assertEquals("medium", argv[argv.indexOf("--effort") + 1])
+    }
 
     @Test
     fun `an agent whose binary is missing is never spawned`() {
