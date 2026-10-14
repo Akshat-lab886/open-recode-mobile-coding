@@ -107,27 +107,13 @@ class PerAgentProviderStore(
         agentId: String,
         provider: String,
         baseUrl: String? = null,
-    ): Map<String, String> = buildMap {
+    ): Map<String, String> {
         val own = vault.agentKey(agentId)
         val shared = vault.apiKey(ApiKeyVault.Provider.fromId(provider))
         val key = own.ifBlank { shared }
-        if (key.isNotBlank()) {
-            put(providerEnvVar(provider), key)
-            // Claude Code and Codex both read the generic OPENAI_* pair when
-            // routed through an OpenAI-compatible endpoint.
-            if (provider == OPENROUTER_ID) {
-                put("OPENAI_API_KEY", key)
-            }
-            if (provider == DEEPSEEK_ID) {
-                put("DSH_API_KEY", key)
-            }
-        }
-        val base = baseUrl?.takeIf { isValidBaseUrl(it) }
-        if (base != null) {
-            put("OPENAI_BASE_URL", base)
-            put("ANTHROPIC_BASE_URL", base)
-            put("OPENAI_API_BASE", base)
-        }
+        // Delegates to the pure companion so the mapping is pinned by JVM tests
+        // without a Context or EncryptedSharedPreferences.
+        return Companion.envFor(provider, key, baseUrl)
     }
 
     suspend fun baseUrlFor(agentId: String): String? =
@@ -137,23 +123,23 @@ class PerAgentProviderStore(
      * Reject anything that is not a plain http(s) origin.
      *
      * This string becomes a base URL that the agent sends its API key to, so a
-     * permissive validator would turn a typo into a credential exfiltration to
+     * permissive validator would turn a typo into credential exfiltration to
      * a typo'd host. No credentials in the URL, no custom scheme, no path.
      */
-    fun isValidBaseUrl(value: String): Boolean {
-        if (!value.startsWith("https://") && !value.startsWith("http://")) return false
-        val rest = value.substringAfter("://")
-        if (rest.isEmpty()) return false
-        if (rest.contains('/')) return false          // origin only, no path
-        if (rest.contains('@')) return false          // no embedded credentials
-        if (rest.contains(' ')) return false
-        val host = rest.substringBefore(':')
-        if (host.isEmpty()) return false
-        if (host.any { it.isWhitespace() }) return false
-        return host.contains('.') || host == "localhost"
-    }
+    fun isValidBaseUrl(value: String): Boolean = Companion.isValidBaseUrl(value)
 
-    private companion object {
+    /**
+     * Pure env-var mapping + base-URL validation for one agent's child process.
+     *
+     * Extracted here (rather than inlined in [environmentFor]) so the precedence
+     * rule — agent-specific key beats shared provider key — and the provider →
+     * env-var mapping are pinned by JVM tests without a Context. An empty key
+     * injects nothing (rather than an empty-string var that some agents treat
+     * as an explicit blank credential). OpenRouter agents also get
+     * OPENAI_API_KEY because their CLI routes through the OpenAI-compatible
+     * shape; DeepSeek additionally gets DSH_API_KEY for the plugin host.
+     */
+    internal companion object {
         const val DEEPSEEK_ID = "deepseek"
         const val OPENROUTER_ID = "openrouter"
         const val ANTHROPIC_ID = "anthropic"
@@ -165,5 +151,32 @@ class PerAgentProviderStore(
             else -> "DEEPSEEK_API_KEY"
         }
 
+        fun isValidBaseUrl(value: String): Boolean {
+            if (!value.startsWith("https://") && !value.startsWith("http://")) return false
+            val rest = value.substringAfter("://")
+            if (rest.isEmpty()) return false
+            if (rest.contains('/')) return false          // origin only, no path
+            if (rest.contains('@')) return false          // no embedded credentials
+            if (rest.contains(' ')) return false
+            val host = rest.substringBefore(':')
+            if (host.isEmpty()) return false
+            if (host.any { it.isWhitespace() }) return false
+            return host.contains('.') || host == "localhost"
+        }
+
+        fun envFor(provider: String, agentKey: String, baseUrl: String?): Map<String, String> =
+            buildMap {
+                if (agentKey.isNotBlank()) {
+                    put(providerEnvVar(provider), agentKey)
+                    if (provider == OPENROUTER_ID) put("OPENAI_API_KEY", agentKey)
+                    if (provider == DEEPSEEK_ID) put("DSH_API_KEY", agentKey)
+                }
+                val base = baseUrl?.takeIf { isValidBaseUrl(it) }
+                if (base != null) {
+                    put("OPENAI_BASE_URL", base)
+                    put("ANTHROPIC_BASE_URL", base)
+                    put("OPENAI_API_BASE", base)
+                }
+            }
     }
 }
