@@ -100,6 +100,39 @@ data class GatewayLaunch(
 )
 
 /**
+ * A per-agent self-check ("doctor"), modelled on 9remote's `doctorSpec`.
+ *
+ * Each harness knows how it is best verified on-device, so the spec is a small
+ * descriptor rather than a `when` block in the runtime:
+ *  - [checkPath] the real entry the launcher uses (gateway JS file or native ELF)
+ *    must exist, otherwise the agent will boot and immediately fail like the old
+ *    codex ENOENT hang.
+ *  - [checkCommand] an optional argv the agent runs to print its version; an empty
+ *    list means "presence of [checkPath] is the whole check" (cheap - no spawn).
+ *
+ * The UI surfaces [title]/reason as a pass/fail row; the runtime runs
+ * [checkCommand] (if any) through the bundled node and reads the first line.
+ */
+data class DoctorSpec(
+    val title: String,
+    /** Real entry the launcher executes (gateway script or native binary), rel. to agents dir. */
+    val checkPath: String,
+    /** Optional version argv, e.g. `["--version"]`. Empty = presence check only. */
+    val checkCommand: List<String> = emptyList(),
+)
+
+/**
+ * A single agent's diagnostic result.
+ * @param ok true when the check passed.
+ * @param detail longer output (the version line, or a missing-path message).
+ */
+data class DoctorResult(
+    val ok: Boolean,
+    val title: String,
+    val detail: String,
+)
+
+/**
  * The set of coding agents this app knows how to install and run.
  *
  * This replaces the hardcoded `when (agent)` blocks that were scattered across
@@ -168,6 +201,12 @@ data class AgentSpec(
      */
     val gatewayLaunch: GatewayLaunch? = null,
     /**
+     * Per-agent self-check descriptor (9remote `doctorSpec`). When null the
+     * Diagnostics sheet shows "No self-check". Presence-of-entry is the default
+     * check; [checkCommand] adds a live `--version` probe when the agent can run.
+     */
+    val doctor: DoctorSpec? = null,
+    /**
      * The real CLI controls this agent exposes to the unified mobile UI.
      * Empty/None when the agent has no user-tunable modes (DSH presets are
      * handled via settings.yaml instead - see ModeSpec).
@@ -219,7 +258,12 @@ object AgentCatalog {
             gatewayBackend = null,
             argvVerified = true,
             gatewayLaunch = null,
-            // DSH modes are presets, resolved from settings.yaml at session
+            doctor = DoctorSpec(
+                title = "DSH runtime",
+                // Verified against both on-disk layouts dshEntryPoint() accepts.
+                checkPath = "dsh/lib/bin.js",
+                checkCommand = listOf("--version"),
+            ),
             // creation (agent-presets.default). A live session's preset is pinned,
             // so a mode change terminates+restarts the session (see ControlAdapter).
             control = ControlSpec(
@@ -282,6 +326,13 @@ object AgentCatalog {
             gatewayLaunch = GatewayLaunch(
                 script = "lib/node_modules/@openai/codex/bin/codex.js",
             ),
+            doctor = DoctorSpec(
+                title = "Codex CLI",
+                // Must match gatewayLaunch.script (the real entry the launcher
+                // runs through node), NOT the `bin/codex` shebang shim.
+                checkPath = "lib/node_modules/@openai/codex/bin/codex.js",
+                checkCommand = listOf("--version"),
+            ),
             // Real codex flags (verified): --model/-m, --approval-mode
             // (strict|auto|disable), --sandbox (<policy>). Plan mode is
             // collaboration_mode="plan". Effort here is codex's own plan toggle.
@@ -308,6 +359,11 @@ object AgentCatalog {
             // Carried over unchanged from the original service; the flag set
             // has never been checked against the real `opencode serve --help`.
             argvVerified = false,
+            doctor = DoctorSpec(
+                title = "OpenCode CLI",
+                checkPath = "lib/node_modules/opencode-ai/bin/opencode",
+                checkCommand = listOf("--version"),
+            ),
         ),
         AgentSpec(
             id = "hermes",
@@ -391,6 +447,13 @@ object AgentCatalog {
             provenanceNote = "Closed source (Google). Uses Google's official native " +
                 "Android binary; the npm name 'antigravity' is an unrelated " +
                 "placeholder and is deliberately not installed.",
+            doctor = DoctorSpec(
+                title = "Antigravity CLI",
+                // Native ELF launched directly (no shebang, no node) - see
+                // the gateway branch in buildArgv. checkPath == relativeBinary.
+                checkPath = "agy/bin/agy",
+                checkCommand = emptyList(),
+            ),
         ),
     )
 

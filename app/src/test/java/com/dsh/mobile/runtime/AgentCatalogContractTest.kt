@@ -317,10 +317,29 @@ class AgentCatalogContractTest {
         assertEquals("standard", a.modeFor(dsh, AgentMode.PLAN))
         assertEquals("minimal", a.modeFor(dsh, AgentMode.READ_ONLY))
         assertEquals("cordis", a.modeFor(dsh, AgentMode.CREATIVE))
-        // Inverse round-trips for every preset.
         assertEquals(AgentMode.CODE_EXECUTION, a.modeFor(dsh, "ptc"))
         assertEquals(AgentMode.PLAN, a.modeFor(dsh, "standard"))
         assertEquals(AgentMode.READ_ONLY, a.modeFor(dsh, "minimal"))
         assertEquals(AgentMode.CREATIVE, a.modeFor(dsh, "cordis"))
+    }
+
+    @Test
+    fun `doctor specs point at the same real entry each launcher uses`() {
+        val c = AgentCatalog
+        val dsh = c.specFor("dsh")!!
+        assertEquals("dsh/lib/bin.js", dsh.doctor!!.checkPath)
+        assertEquals(listOf("--version"), dsh.doctor!!.checkCommand)
+        val codex = c.specFor("codex")!!
+        assertNotNull(codex.doctor)
+        assertEquals(codex.gatewayLaunch!!.script, codex.doctor!!.checkPath)
+        val agy = c.specFor("antigravity")!!
+        assertEquals(agy.relativeBinary, agy.doctor!!.checkPath)
+        assertTrue(agy.doctor!!.checkCommand.isEmpty())
+        assertNull(agy.gatewayLaunch)
+        val oc = c.specFor("opencode")!!
+        assertEquals("lib/node_modules/opencode-ai/bin/opencode", oc.doctor!!.checkPath)
+        assertEquals(listOf("--version"), oc.doctor!!.checkCommand)
+        assertNull(c.specFor("claude")!!.doctor)
+        assertNull(c.specFor("hermes")!!.doctor)
     }
 }

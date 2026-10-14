@@ -15,8 +15,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -56,6 +60,7 @@ import com.dsh.mobile.ui.theme.DshTheme
 fun DiagnosticsSheet(
     state: DiagnosticsStore.DiagnosticsState,
     copiedFlash: String?,
+    doctorResults: List<com.dsh.mobile.data.DoctorResult> = emptyList(),
     onCopyAll: () -> Unit,
     onCopyTrace: (trace: String) -> Unit,
     onDismiss: () -> Unit,
@@ -102,25 +107,67 @@ fun DiagnosticsSheet(
                     DiagTab.AGENT -> state.agentLogFile to state.agentLog
                     DiagTab.HARNESS -> state.harnessLogFile to state.harnessLog
                     DiagTab.BOOTSTRAP -> "dsh-logs/bootstrap.log" to state.bootstrapLog
+                    DiagTab.DOCTOR -> "" to ""
                 }
-                Text(
-                    path.ifBlank { "(no file yet)" },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                CodeSurface(maxHeight = 340.dp) {
+                if (tab != DiagTab.DOCTOR) {
                     Text(
-                        body.ifBlank { "(empty — start the engine to generate logs)" },
-                        Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                            .padding(tokens.spaceMd),
+                        path.ifBlank { "(no file yet)" },
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    CodeSurface(maxHeight = 340.dp) {
+                        Text(
+                            body.ifBlank { "(empty — start the engine to generate logs)" },
+                            Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                                .padding(tokens.spaceMd),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                } else {
+                    // Per-agent doctor self-checks (9remote doctorSpec). Rendered
+                    // as status rows so a missing binary is visible before boot,
+                    // instead of as an opaque agent crash.
+                    doctorResults.forEach { r ->
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    r.title,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                Text(
+                                    r.detail,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 3,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Icon(
+                                imageVector = if (r.ok) Icons.Default.CheckCircle else Icons.Default.Error,
+                                contentDescription = if (r.ok) "ok" else "issue",
+                                tint = if (r.ok) Color(0xFF4CAF50)
+                                else MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    if (doctorResults.isEmpty()) {
+                        Text(
+                            "No installed agents to check.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
 
                 Row(
@@ -161,4 +208,5 @@ private enum class DiagTab(val label: String) {
     AGENT("Agent"),
     HARNESS("harness.log"),
     BOOTSTRAP("Bootstrap"),
+    DOCTOR("Agent check"),
 }

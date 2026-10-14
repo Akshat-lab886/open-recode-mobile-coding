@@ -9,6 +9,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dsh.mobile.bootstrap.BootstrapManager
 import com.dsh.mobile.data.ActiveAgent
+import com.dsh.mobile.data.DoctorResult
+import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.data.AgentMode
 import com.dsh.mobile.data.RuntimeConfig
 import com.dsh.mobile.data.RuntimeConfigStore
@@ -43,6 +45,8 @@ data class ControlCenterState(
     val copiedFlash: String? = null,
     /** Agents whose binary is actually on disk. */
     val installedAgents: List<ActiveAgent> = emptyList(),
+    /** Per-agent doctor self-check results (9remote `doctorSpec`). */
+    val doctorResults: List<DoctorResult> = emptyList(),
     /** Current agent's provider id, base URL and masked key. */
     val providerId: String = "deepseek",
     val providerBaseUrl: String? = null,
@@ -152,6 +156,9 @@ class ControlCenterViewModel(
                 installedAgents = AgentRuntime.installedAgents(
                     AgentRuntime.agentsDir(appContext),
                 ),
+                doctorResults = AgentRuntime.installedAgents(
+                    AgentRuntime.agentsDir(appContext),
+                ).map { AgentRuntime.doctor(it, appContext) },
                 providerId = binding.providerId,
                 providerBaseUrl = binding.baseUrl,
                 providerKeyMask = vault.agentKey(bindingAgent.id).mask(),

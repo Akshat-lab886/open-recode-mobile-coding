@@ -162,6 +162,7 @@ fun DshMobileShell(
             DiagnosticsSheet(
                 state = uiState.diagnostics,
                 copiedFlash = uiState.copiedFlash,
+                doctorResults = uiState.doctorResults,
                 onCopyAll = onCopyAllLogs,
                 onCopyTrace = onCopyTrace,
                 onDismiss = { showDiagnostics = false },
@@ -264,6 +265,7 @@ fun DshMobileShell(
             DiagnosticsSheet(
                 state = uiState.diagnostics,
                 copiedFlash = uiState.copiedFlash,
+                doctorResults = uiState.doctorResults,
                 onCopyAll = onCopyAllLogs,
                 onCopyTrace = onCopyTrace,
                 onDismiss = { showDiagnostics = false },

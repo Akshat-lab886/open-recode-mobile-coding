@@ -4,6 +4,7 @@ import android.content.Context
 import android.system.Os
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentCatalog
+import com.dsh.mobile.data.DoctorResult
 import com.dsh.mobile.data.AgentMode
 import com.dsh.mobile.data.ControlBundle
 import java.io.File
@@ -146,6 +147,55 @@ object AgentRuntime {
         File(context.filesDir, "dsh-logs/${agent.name.lowercase()}.log").apply {
             parentFile?.mkdirs()
         }
+
+    /**
+     * Per-agent self-check (9remote `doctorSpec`).
+     *
+     * Verifies the REAL entry the launcher will exec exists on disk — the same
+     * entry `buildArgv`/`gatewayLaunch` resolves. A missing entry is exactly the
+     * class of bug that produced the codex ENOENT hang, so this is the check the
+     * Diagnostics sheet surfaces before a boot is attempted.
+     *
+     * When [DoctorSpec.checkCommand] is non-empty, the entry is run through the
+     * bundled node (JS agents) and the first output line is captured as detail;
+     * native agents (antigravity, gatewayLaunch==null) only get a presence check.
+     */
+    fun doctor(agent: ActiveAgent, context: Context): DoctorResult {
+        val spec = agent.spec ?: return DoctorResult(
+            ok = false, title = "Unknown agent", detail = "No catalog entry for ${agent.id}.",
+        )
+        val dr = spec.doctor ?: return DoctorResult(
+            ok = true, title = "No self-check", detail = "This agent has no doctor check.",
+        )
+        val agentsDir = agentsDir(context)
+        // Resolve the real entry exactly the launcher does.
+        val entry = File(
+            agentsDir,
+            if (spec.gatewayLaunch != null) spec.gatewayLaunch.script
+            else spec.relativeBinary,
+        )
+        if (!entry.isFile) {
+            return DoctorResult(
+                ok = false, title = dr.title,
+                detail = "Missing entry: ${entry.absolutePath} (install or re-run bootstrap).",
+            )
+        }
+        // Native agents and no-version-command agents: presence is enough.
+        if (dr.checkCommand.isEmpty()) return DoctorResult(
+            ok = true, title = dr.title, detail = "Entry present at ${entry.absolutePath}.",
+        )
+        // Probe with the bundled node so the shebang-free entry runs.
+        val node = nodeBinary(context).absolutePath
+        val probe = runCatching {
+            val proc = ProcessBuilder(node, "--no-warnings", entry.absolutePath, *dr.checkCommand.toTypedArray())
+                .redirectErrorStream(true)
+                .start()
+            proc.waitFor()
+            proc.inputStream.bufferedReader().use { it.readLine() ?: "(no output)" }
+        }.getOrDefault("probe failed: could not run $node ${entry.absolutePath}")
+        return DoctorResult(ok = true, title = dr.title, detail = probe)
+    }
+
 
     /** Finds a free loopback port in the app's private range. */
     fun findFreePort(preferred: Int = 0): Int {
