@@ -472,7 +472,7 @@ private fun CompactLayout(
                     // Native composer under the agent surface. imePadding on the
                     // stage, not here: the bar must stay put while the field
                     // takes focus, or the layout jumps on every keystroke.
-                    ComposerBar(onSend = onCommand)
+                    ComposerBar(workspacePath = uiState.config.workspacePath, onSend = onCommand)
                 }
                 // Native tab surfaces (one per round as they are built).
                 DeckTab.DIFFS -> DiffsPane(
@@ -625,7 +625,7 @@ private fun ExpandedLayout(
                             onRetryBoot = onRetryBoot,
                             modifier = Modifier.weight(1f).imePadding(),
                         )
-                        ComposerBar(onSend = onCommand)
+                        ComposerBar(workspacePath = uiState.config.workspacePath, onSend = onCommand)
                     }
                     DeckTab.DIFFS -> DiffsPane(
                         configuredWorkspacePath = uiState.config.workspacePath,

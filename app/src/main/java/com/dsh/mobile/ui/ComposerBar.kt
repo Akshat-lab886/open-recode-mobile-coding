@@ -21,12 +21,20 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import com.dsh.mobile.commands.ContextMentions
+import com.dsh.mobile.diff.WorkspaceDiff
+import com.dsh.mobile.runtime.AgentRuntime
+import java.io.File
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.commands.CommandResolution
@@ -47,10 +55,37 @@ import com.dsh.mobile.ui.theme.DshTheme
  */
 @Composable
 fun ComposerBar(
+    workspacePath: String,
     onSend: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var text by remember { mutableStateOf("") }
+
+    // "@" file mentions. The candidate list is only materialised while a token
+    // is actually open, so an idle composer never walks the workspace.
+    val context = LocalContext.current
+    val workspace = remember(workspacePath) {
+        val picked = File(workspacePath)
+        if (workspacePath.isNotBlank() && picked.isDirectory && picked.canRead()) picked
+        else AgentRuntime.defaultWorkspace(context)
+    }
+    val activeMention = remember(text) { ContextMentions.activeToken(text) }
+
+    // The workspace is walked ONCE per workspace, off the UI thread. Doing this
+    // inside remember{} would re-run a full recursive scan on every keystroke on
+    // the main thread - an ANR the moment the workspace is not trivial. The
+    // mention list is then filtered synchronously, which is pure and cheap.
+    var candidates by remember { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(workspacePath) {
+        val list = withContext(Dispatchers.IO) {
+            WorkspaceDiff.scan(workspace).keys.sorted()
+        }
+        candidates = list
+    }
+    val mentionMatches: List<String> = remember(activeMention, candidates) {
+        val token = activeMention ?: return@remember emptyList()
+        ContextMentions.complete(candidates, token)
+    }
 
     // Only offer the palette once the line actually starts a command, so
     // ordinary prose is not buried under a list of buttons.
@@ -101,7 +136,36 @@ fun ComposerBar(
             }
         }
 
-        Row(
+        // "@" suggestions take over the chip row while a mention is open - both
+        // occupy the same space and showing them together would be clutter.
+        if (mentionMatches.isNotEmpty()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = DshTheme.tokens.spaceSm, vertical = DshTheme.tokens.spaceXs),
+                horizontalArrangement = Arrangement.spacedBy(DshTheme.tokens.spaceXs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (path in mentionMatches) {
+                    Text(
+                        "@$path",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .background(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                                MaterialTheme.shapes.small,
+                            )
+                            .clickable {
+                                text = ContextMentions.applyCompletion(text, path) ?: text
+                            }
+                            .padding(horizontal = DshTheme.tokens.spaceSm, vertical = 6.dp),
+                    )
+                }
+            }
+        } else Row(
             Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
