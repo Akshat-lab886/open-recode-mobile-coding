@@ -155,7 +155,12 @@ fun TerminalPane(
 private fun QuickCommands(onPick: (String) -> Unit) {
     val chips = listOf("pwd", "ls -la", "cat", "du -sh .", "find . -maxdepth 2", "echo \$PATH")
     LazyRow(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        // NO horizontalScroll() here. A LazyRow is already a horizontal
+        // scrollable; wrapping one in another scrollable hands it infinite max
+        // width constraints and Compose throws IllegalStateException at measure
+        // time - which is a crash, not a layout warning. Caught on device: the
+        // Terminal tab killed the app the moment it opened.
+        Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(DshTheme.tokens.spaceXs),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = DshTheme.tokens.spaceSm),
     ) {
