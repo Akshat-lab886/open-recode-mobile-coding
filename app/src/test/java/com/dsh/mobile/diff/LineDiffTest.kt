@@ -102,4 +102,41 @@ class LineDiffTest {
         val out = LineDiff.diff(listOf("a", "b"), listOf("a", "b", "c"))!!
         assertEquals(1, LineDiff.changeCount(out))
     }
+
+    @Test
+    fun `stat separates added from removed`() {
+        val out = LineDiff.diff(listOf("a", "b", "c"), listOf("a", "x", "y", "c"))!!
+        val stat = LineDiff.stat(out)
+        assertEquals(2, stat.added)
+        assertEquals(1, stat.removed)
+        assertEquals(3, stat.total)
+        assertEquals("+2 -1", stat.render())
+    }
+
+    @Test
+    fun `an unchanged file renders as a dash not +0 -0`() {
+        val stat = LineDiff.statOf("a\nb\n", "a\nb\n")!!
+        assertTrue(stat.isEmpty)
+        assertEquals("-", stat.render())
+    }
+
+    @Test
+    fun `a brand new file counts every line as added`() {
+        val stat = LineDiff.statOf(null, "a\nb\nc\n")!!
+        assertEquals(3, stat.added)
+        assertEquals(0, stat.removed)
+    }
+
+    @Test
+    fun `a deleted file counts every line as removed`() {
+        val stat = LineDiff.statOf("a\nb\n", null)!!
+        assertEquals(0, stat.added)
+        assertEquals(2, stat.removed)
+    }
+
+    @Test
+    fun `statOf returns null above the size cap instead of guessing`() {
+        val huge = "x\n".repeat(LineDiff.MAX_LINES + 1)
+        org.junit.Assert.assertNull(LineDiff.statOf(huge, huge))
+    }
 }

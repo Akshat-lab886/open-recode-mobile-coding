@@ -70,4 +70,17 @@ class WorkspaceBaselineStoreTest {
         s.clear()
         assertTrue(!s.exists())
     }
+
+    @Test
+    fun `a baseline saved from an EMPTY workspace still exists`() {
+        // Regression: DiffsPane derived "has a baseline" from the loaded map
+        // being non-empty. A baseline taken on an empty workspace is an empty
+        // map, so the tab reported real changes in its header while its body
+        // still said "No baseline yet". Existence must be tested on the store.
+        val s = store()
+        assertTrue(!s.exists())
+        s.save(emptyMap())
+        assertTrue("an empty baseline is still a baseline", s.exists())
+        assertEquals(emptyMap<String, FileSnapshot>(), s.load())
+    }
 }

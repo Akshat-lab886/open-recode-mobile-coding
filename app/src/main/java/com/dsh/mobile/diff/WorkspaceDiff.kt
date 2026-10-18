@@ -138,4 +138,42 @@ object WorkspaceDiff {
         if (baseline?.tooLarge == true || current?.tooLarge == true) return null
         return LineDiff.diff(old, new)
     }
+
+    /**
+     * The stat for one changed file, or null when it cannot be diffed.
+     *
+     * For an added or deleted file this is simply its line count - there is no
+     * other side to compare against, and "+N -0" is exactly what a reviewer
+     * expects to see for a new file.
+     */
+    fun statFor(
+        path: String,
+        baseline: Map<String, FileSnapshot>,
+        current: Map<String, FileSnapshot>,
+    ): LineDiff.Stat? {
+        val b = baseline[path]
+        val c = current[path]
+        if (b?.tooLarge == true || c?.tooLarge == true) return null
+        return when {
+            b == null -> LineDiff.statOf(null, c?.content)
+            c == null -> LineDiff.statOf(b.content, null)
+            else -> LineDiff.statOf(b.content, c.content)
+        }
+    }
+
+    /** Totals across every changed file, for the header line. */
+    fun totals(
+        changes: WorkspaceChanges,
+        baseline: Map<String, FileSnapshot>,
+        current: Map<String, FileSnapshot>,
+    ): LineDiff.Stat {
+        var added = 0
+        var removed = 0
+        for (path in changes.added + changes.modified + changes.deleted) {
+            val s = statFor(path, baseline, current) ?: continue
+            added += s.added
+            removed += s.removed
+        }
+        return LineDiff.Stat(added, removed)
+    }
 }

@@ -94,4 +94,36 @@ object LineDiff {
      */
     fun lines(text: String): List<String> =
         if (text.isEmpty()) emptyList() else text.removeSuffix("\n").split("\n")
+
+    /**
+     * Added/removed line totals for a rendered diff.
+     *
+     * [render] produces the conventional "+12 -3" header. Kept separate from
+     * [changeCount] because a change count cannot tell a reviewer whether work
+     * was added or deleted, and "+0 -40" is a very different signal from
+     * "+40 -0".
+     */
+    data class Stat(val added: Int, val removed: Int) {
+        val total: Int get() = added + removed
+
+        /** True when nothing actually changed. */
+        val isEmpty: Boolean get() = total == 0
+
+        /** "+12 -3"; "-" alone for an empty stat rather than a bare "+0 -0". */
+        fun render(): String = if (isEmpty) "-" else "+$added -$removed"
+    }
+
+    /** Totals for an already-rendered diff. */
+    fun stat(lines: List<DiffLine>): Stat = Stat(
+        added = lines.count { it.kind == DiffKind.ADDED },
+        removed = lines.count { it.kind == DiffKind.REMOVED },
+    )
+
+    /** Totals straight from two file bodies, or null above the size cap. */
+    fun statOf(oldText: String?, newText: String?): Stat? {
+        val old = oldText?.let { lines(it) } ?: emptyList()
+        val new = newText?.let { lines(it) } ?: emptyList()
+        if (old.size > MAX_LINES || new.size > MAX_LINES) return null
+        return stat(diff(old, new) ?: return null)
+    }
 }

@@ -135,4 +135,45 @@ class WorkspaceDiffTest {
     fun `diffFile returns null for a tooLarge file`() {
         assertNull(WorkspaceDiff.diffFile(FileSnapshot(null, 10, tooLarge = true), FileSnapshot(null, 20, tooLarge = true)))
     }
+
+    @Test
+    fun `statFor counts an added file as all added`() {
+        write("new.txt", "a\nb\n")
+        val current = WorkspaceDiff.scan(tmp.root)
+        val stat = WorkspaceDiff.statFor("new.txt", emptyMap(), current)!!
+        assertEquals(2, stat.added)
+        assertEquals(0, stat.removed)
+    }
+
+    @Test
+    fun `statFor counts a deleted file as all removed`() {
+        write("gone.txt", "a\nb\n")
+        val baseline = WorkspaceDiff.scan(tmp.root)
+        File(tmp.root, "gone.txt").delete()
+        val current = WorkspaceDiff.scan(tmp.root)
+        val stat = WorkspaceDiff.statFor("gone.txt", baseline, current)!!
+        assertEquals(2, stat.removed)
+    }
+
+    @Test
+    fun `totals sums every changed file`() {
+        write("a.txt", "x\n")
+        val baseline = WorkspaceDiff.scan(tmp.root)
+        write("a.txt", "x\ny\n")   // +1
+        write("b.txt", "1\n2\n3\n") // +3
+        val current = WorkspaceDiff.scan(tmp.root)
+        val changes = WorkspaceDiff.compare(baseline, current)
+        val totals = WorkspaceDiff.totals(changes, baseline, current)
+        assertEquals(4, totals.added)
+        assertEquals(0, totals.removed)
+        assertEquals("+4 -0", totals.render())
+    }
+
+    @Test
+    fun `totals of an empty changeset is empty`() {
+        val snap = WorkspaceDiff.scan(files { write("a.txt", "x") })
+        val t = WorkspaceDiff.totals(WorkspaceDiff.compare(snap, snap), snap, snap)
+        assertTrue(t.isEmpty)
+        assertEquals("-", t.render())
+    }
 }

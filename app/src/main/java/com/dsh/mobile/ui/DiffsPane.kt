@@ -49,6 +49,9 @@ private data class DiffsState(
     val baseline: Map<String, FileSnapshot> = emptyMap(),
     val current: Map<String, FileSnapshot> = emptyMap(),
     val hasBaseline: Boolean = false,
+    /** Totals across the whole changeset, for the header. */
+    val totals: com.dsh.mobile.diff.LineDiff.Stat =
+        com.dsh.mobile.diff.LineDiff.Stat(0, 0),
 )
 
 /**
@@ -83,12 +86,19 @@ fun DiffsPane(
     suspend fun scanInto(s: DiffsState): DiffsState = withContext(Dispatchers.IO) {
         val baseline = store.load()
         val current = WorkspaceDiff.scan(workspace)
+        val changes = WorkspaceDiff.compare(baseline, current)
         s.copy(
             loading = false,
-            changes = WorkspaceDiff.compare(baseline, current),
+            changes = changes,
             baseline = baseline,
             current = current,
-            hasBaseline = baseline.isNotEmpty(),
+            // store.exists(), NOT baseline.isNotEmpty(). A baseline taken on an
+            // empty workspace is legitimately an EMPTY map, so testing the map
+            // made "I saved a baseline" indistinguishable from "I never took
+            // one" - the header would report real changes while the body still
+            // said "No baseline yet". Caught on device with real files.
+            hasBaseline = store.exists(),
+            totals = WorkspaceDiff.totals(changes, baseline, current),
         )
     }
 
@@ -132,10 +142,10 @@ fun DiffsPane(
                     DiffSection("Modified", state.changes.modified, modifiedTint, state, expanded, toggle)
                     DiffSection("Deleted", state.changes.deleted, deletedTint, state, expanded, toggle)
                 }
+                }
             }
         }
     }
-}
 
 @Composable
 private fun DiffHeader(
@@ -150,11 +160,21 @@ private fun DiffHeader(
         horizontalArrangement = Arrangement.spacedBy(DshTheme.tokens.spaceSm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            if (state.changes.isEmpty) "No changes" else "${state.changes.changedCount} changed",
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (state.changes.isEmpty) "No changes" else "${state.changes.changedCount} changed",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            // "+12 -3" reads at a glance where a bare file count cannot: it is
+            // the difference between adding a feature and deleting 40 lines.
+            if (!state.changes.isEmpty) {
+                Text(
+                    state.totals.render(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Button(onClick = onSetBaseline, enabled = !state.loading) {
             Text(if (state.hasBaseline) "Rebase" else "Set baseline")
         }
