@@ -77,8 +77,10 @@ fun ComposerBar(
     // mention list is then filtered synchronously, which is pure and cheap.
     var candidates by remember { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(workspacePath) {
+        // scanPaths, not scan: this only needs names, and scan would read every
+        // file's contents (up to 256KB each) purely to render a suggestion list.
         val list = withContext(Dispatchers.IO) {
-            WorkspaceDiff.scan(workspace).keys.sorted()
+            WorkspaceDiff.scanPaths(workspace)
         }
         candidates = list
     }

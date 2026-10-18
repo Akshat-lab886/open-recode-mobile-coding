@@ -176,4 +176,34 @@ object WorkspaceDiff {
         }
         return LineDiff.Stat(added, removed)
     }
+
+    /**
+     * Paths only - the same walk as [scan] but WITHOUT reading file contents.
+     *
+     * The composer's @ mention list needs names, not bytes, and calling [scan]
+     * there meant opening every file in the workspace (up to 256KB each) just
+     * to render a list of suggestions. On a real project that is megabytes of
+     * pointless IO on a tablet.
+     */
+    fun scanPaths(root: File, limit: Int = 20_000): List<String> {
+        if (!root.isDirectory) return emptyList()
+        val out = ArrayList<String>()
+        val stack = ArrayDeque<File>()
+        stack.addLast(root)
+        var depth = 0
+        while (stack.isNotEmpty() && out.size < limit) {
+            val dir = stack.removeLast()
+            if (depth++ > MAX_DEPTH) continue
+            val children = dir.listFiles() ?: continue
+            for (child in children.sortedBy { it.name }) {
+                if (out.size >= limit) break
+                if (child.isDirectory) {
+                    if (!shouldSkipDir(child.name)) stack.addLast(child)
+                } else {
+                    out += relativePath(root, child)
+                }
+            }
+        }
+        return out.sorted()
+    }
 }

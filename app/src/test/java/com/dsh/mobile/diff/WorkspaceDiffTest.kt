@@ -13,7 +13,7 @@ class WorkspaceDiffTest {
 
     @get:Rule val tmp = TemporaryFolder()
 
-    private fun write(path: String, text: String): File =
+    private fun write(path: String, text: String = "x"): File =
         File(tmp.root, path).apply { parentFile?.mkdirs(); writeText(text) }
 
     /** Runs the writes, then returns the workspace root to scan. */
@@ -175,5 +175,31 @@ class WorkspaceDiffTest {
         val t = WorkspaceDiff.totals(WorkspaceDiff.compare(snap, snap), snap, snap)
         assertTrue(t.isEmpty)
         assertEquals("-", t.render())
+    }
+
+    @Test
+    fun `scanPaths lists paths without reading contents`() {
+        write("src/Main.kt", "fun main() {}")
+        write("README.md", "# hi")
+        assertEquals(listOf("README.md", "src/Main.kt"), WorkspaceDiff.scanPaths(tmp.root))
+    }
+
+    @Test
+    fun `scanPaths skips noise and hidden directories`() {
+        write("keep.txt")
+        write("node_modules/p/i.js")
+        write(".git/config")
+        assertEquals(listOf("keep.txt"), WorkspaceDiff.scanPaths(tmp.root))
+    }
+
+    @Test
+    fun `scanPaths on a missing root is empty not a crash`() {
+        assertTrue(WorkspaceDiff.scanPaths(File(tmp.root, "nope")).isEmpty())
+    }
+
+    @Test
+    fun `scanPaths honours its limit`() {
+        repeat(12) { write("f$it.txt") }
+        assertEquals(5, WorkspaceDiff.scanPaths(tmp.root, limit = 5).size)
     }
 }
