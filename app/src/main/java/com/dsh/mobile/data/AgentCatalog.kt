@@ -618,8 +618,25 @@ object AgentCatalog {
             // serve branch does not apply argvFor at all, so there is no correct
             // place to put it either.
             "opencode" -> null
-            // dsh pins its preset in settings.yaml and manages sessions
-            // server-side; there is no resume flag.
+            // dsh pins its preset in settings.yaml, and its sessions live
+            // SERVER-SIDE, so there is no argv flag to pass. What that actually
+            // looks like, read from the dsh checkout rather than guessed:
+            //   * session ids are UUIDs persisted per workspace at
+            //     ~/.dsh/sessions/<mangled-cwd>/<uuid>/ (spaces become ~0020),
+            //     so a restart does NOT delete the conversation - it is on disk;
+            //   * the session API already models resuming:
+            //     dsh-api-session-controller declares
+            //     `RequestHeaderReason = 'initial' | 'resume' | 'change' | 'series'`
+            //     and a Session cursor ("follow one Session log from its opening
+            //     or resume cursor");
+            //   * dsh-agent exposes `async resume(options)`.
+            // So the capability exists but is reached through the web app, not
+            // through a launcher flag. The launcher's own help shows
+            // `dsh --profile tui --resume <session>` forwarding an UNRECOGNISED
+            // token to the profile app - which documents the tui profile, not
+            // web. Until the web profile's own flag is verified the same way the
+            // claude/opencode ones were, this stays null rather than shipping a
+            // guessed flag that would exit non-zero and read as a broken boot.
             else -> null
         }
 
