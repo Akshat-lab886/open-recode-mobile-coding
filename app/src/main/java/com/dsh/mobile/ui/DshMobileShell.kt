@@ -457,6 +457,10 @@ private fun CompactLayout(
                     configuredWorkspacePath = uiState.config.workspacePath,
                     modifier = Modifier.weight(1f),
                 )
+                DeckTab.TERMINAL -> TerminalPane(
+                    configuredWorkspacePath = uiState.config.workspacePath,
+                    modifier = Modifier.weight(1f),
+                )
                 else -> DeckTabPlaceholder(
                     tab = deckTab,
                     uiState = uiState,
@@ -587,6 +591,10 @@ private fun ExpandedLayout(
                         modifier = Modifier.fillMaxSize(),
                     )
                     DeckTab.FILES -> FilesPane(
+                        configuredWorkspacePath = uiState.config.workspacePath,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    DeckTab.TERMINAL -> TerminalPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
                         modifier = Modifier.fillMaxSize(),
                     )
