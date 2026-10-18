@@ -595,11 +595,32 @@ object AgentCatalog {
          * `--help` to avoid a non-zero exit at boot.
          */
         fun resumeIdArgFor(id: String): String? = when (id) {
+            // VERIFIED: `claude --resume <session-id>` (Claude Code session
+            // docs). argvFor lands after the real claude command in the gateway
+            // branch, which is exactly where claude expects the flag. Caveat the
+            // docs record: resuming a session that is still RUNNING in the
+            // background with configuring flags present sends nothing and exits
+            // 1 - not our case, because a mode change terminates the child first.
+            "claude" -> "--resume"
+            // VERIFIED via Mobile-Harness `antigravityCommand`: `--resume
+            // <conversationId>`, captured from the agent's Initialized event.
             "antigravity" -> "--resume"
-            "codex" -> "--thread-id"      // unverified
-            "claude" -> "--session-id"   // unverified
-            "opencode" -> "--resume"     // unverified
-            else -> null                 // dsh uses a settings.yaml key, not a flag
+            // codex resumes through a SUBCOMMAND, not a flag: the real form is
+            // `codex exec resume <session-id>` (`--last` for the most recent).
+            // This app appends flags AFTER the command, so the subcommand cannot
+            // be expressed without inserting a token into the middle of codex's
+            // argv - doing that blind is how a boot ends in a non-zero exit.
+            // codex therefore keeps starting fresh until that path is reworked.
+            "codex" -> null
+            // opencode's continue flag is --session/-s, but it lives on
+            // `run` / `tui` / `attach` and NOT on the `opencode serve` mode this
+            // app launches (verified against the OpenCode CLI reference). The
+            // serve branch does not apply argvFor at all, so there is no correct
+            // place to put it either.
+            "opencode" -> null
+            // dsh pins its preset in settings.yaml and manages sessions
+            // server-side; there is no resume flag.
+            else -> null
         }
 
         /** Real argv for [bundle], or empty when the agent has no such knobs. */
@@ -634,6 +655,12 @@ object AgentCatalog {
                     "host" -> args += listOf("--permission-mode", "hosted")
                     "plan" -> args += listOf("--permission-mode", "plan")
                     else -> Unit
+                }
+                // Resume the captured session id (Mobile-Harness bindResume),
+                // so a mode change continues the conversation instead of
+                // dropping it.
+                resumeIdArgFor("claude")?.let { flag ->
+                    bundle.resumeId?.let { if (it.isNotBlank()) args += listOf(flag, it) }
                 }
                 args
             }

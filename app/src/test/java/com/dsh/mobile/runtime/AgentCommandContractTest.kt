@@ -8,6 +8,7 @@ import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -311,6 +312,43 @@ private val dshAllowedOptions = setOf(
             control = AgentCatalog.ControlAdapter.bundleForMode("antigravity", AgentMode.PLAN),
         )
         assertFalse("--resume must be omitted when there is no id: $noResume", noResume.contains("--resume"))
+    }
+
+    @Test
+    fun `claude resumes with --resume and codex opencode decline the flag`() {
+        // Pinned against the vendors' own documentation:
+        //  - Claude Code: `claude --resume <session-id>` (session docs).
+        //  - OpenCode: continue is `--session`/`-s`, but only on
+        //    run/tui/attach - NOT on the `opencode serve` mode this app
+        //    launches, and that branch does not apply argvFor at all.
+        //  - Codex: resume is the SUBCOMMAND `codex exec resume <id>`, not a
+        //    trailing flag this append-only argv builder can express.
+        // A null mapping is the safe outcome: it starts a fresh session rather
+        // than handing the CLI an unknown flag, which exits non-zero and reads
+        // to the user as "the agent is installed and nothing works".
+        assertEquals("--resume", AgentCatalog.ControlAdapter.resumeIdArgFor("claude"))
+        assertNull(AgentCatalog.ControlAdapter.resumeIdArgFor("codex"))
+        assertNull(AgentCatalog.ControlAdapter.resumeIdArgFor("opencode"))
+        assertNull(AgentCatalog.ControlAdapter.resumeIdArgFor("dsh"))
+
+        val claude = AgentRuntime.buildArgv(
+            agent = ActiveAgent.CLAUDE_CODE,
+            nodePath = node,
+            agentsDir = agents,
+            port = port,
+            control = ControlBundle(mode = "plan", resumeId = "sess-9f8e7d6c"),
+        )
+        assertEquals("sess-9f8e7d6c", claude[claude.indexOf("--resume") + 1])
+
+        // A codex argv carrying a resumeId must gain no resume token at all.
+        val codex = AgentRuntime.buildArgv(
+            agent = ActiveAgent.CODEX,
+            nodePath = node,
+            agentsDir = agents,
+            port = port,
+            control = ControlBundle(mode = "plan", resumeId = "thread-12345678"),
+        )
+        assertFalse("codex must not emit a resume token: $codex", codex.contains("thread-12345678"))
     }
 
     @Test
