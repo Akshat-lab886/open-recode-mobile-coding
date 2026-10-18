@@ -1,6 +1,7 @@
 package com.dsh.mobile
 
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import android.content.Intent
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dsh.mobile.service.AgentRuntimeService
 import androidx.compose.material3.ModalBottomSheet
@@ -20,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import com.dsh.mobile.data.AgentCatalog
+import com.dsh.mobile.ui.AgentCommand
 import com.dsh.mobile.ui.AgentPickerSheet
 import com.dsh.mobile.ui.BootstrapProgressView
 import com.dsh.mobile.ui.CommandDispatcher
@@ -218,6 +221,19 @@ class MainActivity : ComponentActivity() {
      * since gateway-ui's own composer already posts.
      */
     private fun dispatchCommand(command: String) {
+        // Clearing the context must also forget the captured conversation id.
+        // Otherwise the next mode change or respawn would resume the very
+        // thread the user just cleared - the opposite of what Clear means.
+        // This is the clear() half of ResumeIdStore; the capture half lives in
+        // AgentRuntimeService's stdout pump.
+        if (command.trim() == AgentCommand.CLEAR.command) {
+            val app = application as DshMobileApp
+            lifecycleScope.launch(Dispatchers.IO) {
+                val agentId = app.configStore.snapshot().agent.id
+                app.resumeIds.clear(agentId)
+                Log.i(TAG, "clear: forgot captured conversation id for $agentId")
+            }
+        }
         CommandDispatcher.dispatch?.invoke(command)
     }
 

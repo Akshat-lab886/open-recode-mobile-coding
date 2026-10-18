@@ -1,5 +1,9 @@
 package com.dsh.mobile.service
 
+import java.io.ByteArrayInputStream
+import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -120,5 +124,124 @@ class AgentLaunchTest {
         assertTrue("token is required or the page answers 401", url!!.contains("token=abc123"))
         // The bare origin is what the app falls back to and it renders blank.
         assertFalse(url.startsWith("http://127.0.0.1:3080/?token=").not())
+    }
+
+    // -- agent log: append + rotation ----------------------------------------
+    //
+    // Regression cover for two real defects in the previous writer:
+    //   * `File.writer()` truncates, and stdout + stderr are pumped into the
+    //     SAME file by two threads - so the second pump erased the first,
+    //     taking the tokenized launch URL above with it.
+    //   * nothing ever trimmed the file, so it grew without bound on a device
+    //     whose data partition is shared with the runtime and the workspace.
+
+    private fun tempLog(): File =
+        File(Files.createTempDirectory("dsh-log").toFile(), "agent.log")
+
+    @Test
+    fun `openLogWriter appends instead of truncating`() {
+        val log = tempLog()
+        AgentLaunch.openLogWriter(log).use { it.println("first boot") }
+        AgentLaunch.openLogWriter(log).use { it.println("second boot") }
+
+        val text = log.readText()
+        assertTrue("earlier content was erased: $text", text.contains("first boot"))
+        assertTrue("later content missing: $text", text.contains("second boot"))
+    }
+
+    @Test
+    fun `two pumps into one log keep both streams`() {
+        // Exactly the old failure: stdout pumped first, stderr second, and the
+        // log ended up holding only stderr.
+        val log = tempLog()
+        val banner = "dsh web: http://127.0.0.1:3979/?token=$realToken"
+        AgentLaunch.pump(ByteArrayInputStream("$banner\n".toByteArray()), log).join(5_000)
+        AgentLaunch.pump(ByteArrayInputStream("warn: something\n".toByteArray()), log).join(5_000)
+
+        val text = log.readText()
+        assertTrue("stdout banner was clobbered by stderr: $text", text.contains(realToken))
+        assertTrue("stderr missing: $text", text.contains("warn: something"))
+    }
+
+    @Test
+    fun `rotateIfNeeded leaves a small log alone`() {
+        val log = tempLog()
+        log.writeText("tiny")
+        assertFalse(AgentLaunch.rotateIfNeeded(log, maxBytes = 1024))
+        assertTrue(log.isFile)
+    }
+
+    @Test
+    fun `rotateIfNeeded moves a full log aside and keeps one generation`() {
+        val log = tempLog()
+        log.writeText("a".repeat(2_000))
+        assertTrue(AgentLaunch.rotateIfNeeded(log, maxBytes = 1_024))
+        assertFalse("the live log should have been moved aside", log.isFile)
+        val previous = File(log.parentFile, log.name + ".1")
+        assertTrue("previous generation missing", previous.isFile)
+        assertEquals(2_000, previous.length().toInt())
+
+        // Rotating again must REPLACE the single previous generation, not
+        // accumulate .2, .3, ... and fill the partition anyway.
+        log.writeText("b".repeat(2_000))
+        assertTrue(AgentLaunch.rotateIfNeeded(log, maxBytes = 1_024))
+        assertEquals(2_000, previous.length().toInt())
+        assertEquals("b".repeat(2_000), previous.readText())
+        assertFalse(File(log.parentFile, log.name + ".2").exists())
+    }
+
+    @Test
+    fun `openLogWriter rotates a log that is already full`() {
+        // Rotation happens when the log is OPENED, so the fixture has to be a
+        // pre-existing full log - a brand-new file has nothing to rotate.
+        val log = tempLog()
+        log.writeText("x".repeat(600))
+        AgentLaunch.openLogWriter(log, maxBytes = 512).use { it.println("fresh line") }
+
+        val previous = File(log.parentFile, log.name + ".1")
+        assertTrue("the full log should have been moved aside", previous.isFile)
+        assertEquals(600, previous.length().toInt())
+        assertTrue("the new log must start small", log.length() < 512)
+        assertTrue("the new line is missing", log.readText().contains("fresh line"))
+    }
+
+    @Test
+    fun `pump still captures the banner while appending over an existing log`() {
+        val log = tempLog()
+        log.writeText("prior content\n")
+        val found = AtomicReference<String?>(null)
+        val banner = "dsh web: http://127.0.0.1:3100/?token=$realToken"
+        AgentLaunch.pump(
+            ByteArrayInputStream("$banner\n".toByteArray()),
+            log,
+            found,
+        ).join(5_000)
+
+        assertEquals("http://127.0.0.1:3100/?token=$realToken", found.get())
+        assertTrue("prior content was truncated", log.readText().contains("prior content"))
+    }
+
+    @Test
+    fun `pump bounds a log that runs past the cap mid-session`() {
+        val log = tempLog()
+        // Enough lines to cross 2MB inside one run, so the periodic check - not
+        // just the open-time check - has to fire.
+        // 700 x ~5KB = ~3.5MB, comfortably past the 2MB cap at a check
+        // boundary. (An earlier fixture used 4000-byte lines, whose 512-line
+        // mark landed at 2.048MB - just UNDER the cap, so rotation correctly
+        // never fired and the test blamed the code for its own arithmetic.)
+        val line = "y".repeat(5_000)
+        val payload = (1..700).joinToString("\n") { line } + "\n"
+        assertTrue("fixture must exceed the cap", payload.length.toLong() > AgentLaunch.MAX_LOG_BYTES)
+
+        AgentLaunch.pump(ByteArrayInputStream(payload.toByteArray()), log).join(20_000)
+
+        val previous = File(log.parentFile, log.name + ".1")
+        assertTrue("expected a mid-session rotation to leave a .1", previous.isFile)
+        // The live file must never hold the whole unbounded stream.
+        assertTrue(
+            "live log was not bounded: ${log.length()} bytes",
+            log.length() < AgentLaunch.MAX_LOG_BYTES,
+        )
     }
 }
