@@ -3,6 +3,7 @@ package com.dsh.mobile.runtime
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.data.AgentCatalog
 import com.dsh.mobile.data.AgentMode
+import com.dsh.mobile.data.ControlBundle
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
@@ -179,6 +180,13 @@ private val dshAllowedOptions = setOf(
             "LD_LIBRARY_PATH must include the unpacked asset libs",
             env["LD_LIBRARY_PATH"]!!.startsWith(native.libsDir),
         )
+        // Mobile-Harness base env policy, ported verbatim to kill silent
+        // background update/telemetry/error-report traffic that is worthless
+        // inside PRoot on a phone and slows startup.
+        assertEquals("DISABLE_AUTOUPDATER", "1", env["DISABLE_AUTOUPDATER"])
+        assertEquals("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1", env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"])
+        assertEquals("DISABLE_TELEMETRY", "1", env["DISABLE_TELEMETRY"])
+        assertEquals("DISABLE_ERROR_REPORTING", "1", env["DISABLE_ERROR_REPORTING"])
         // Without this every run aborts with BIO_new_file:Permission denied,
         // because Termux's Node hardcodes its OpenSSL config to Termux's prefix.
         assertEquals(native.opensslConf, env["OPENSSL_CONF"])
@@ -275,6 +283,34 @@ private val dshAllowedOptions = setOf(
         // PLAN -> mode=plan, effort=medium, surfaced as real agy flags.
         assertEquals("plan", argv[argv.indexOf("--mode") + 1])
         assertEquals("medium", argv[argv.indexOf("--effort") + 1])
+    }
+
+    @Test
+    fun `antigravity resumes a conversation with the captured id`() {
+        // Mobile-Harness `antigravityCommand(model, effort, conversationId)`
+        // appends `--resume <id>`; the id is captured from the agent's
+        // `Initialized` event and persisted so a mode change / respawn does not
+        // nuke the thread. Here we pin the arg mapping (the capture side lives
+        // in AgentRuntimeService + AgentState).
+        val argv = AgentRuntime.buildArgv(
+            agent = ActiveAgent.ANTIGRAVITY,
+            nodePath = node,
+            agentsDir = agents,
+            port = port,
+            control = ControlBundle(mode = "plan", effort = "medium", resumeId = "conv-123"),
+        )
+        // Resume flag lives with the other antigravity flags, after `--`.
+        assertEquals("conv-123", argv[argv.indexOf("--resume") + 1])
+        // And it is NOT present when no id was captured — a null resume must
+        // never emit a bare `--resume` (agy would reject the empty arg).
+        val noResume = AgentRuntime.buildArgv(
+            agent = ActiveAgent.ANTIGRAVITY,
+            nodePath = node,
+            agentsDir = agents,
+            port = port,
+            control = AgentCatalog.ControlAdapter.bundleForMode("antigravity", AgentMode.PLAN),
+        )
+        assertFalse("--resume must be omitted when there is no id: $noResume", noResume.contains("--resume"))
     }
 
     @Test

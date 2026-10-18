@@ -84,6 +84,26 @@ data class ControlBundle(
     val mode: String? = null,
     val effort: String? = null,
     val model: String? = null,
+    /**
+     * Optional conversation/session id to resume an existing agent thread.
+     *
+     * Mirrors 9remote/Mobile-Harness `bindResume`: each CLI spells its
+     * conversation id differently, so this holds the opaque id captured from
+     * the previous run and `argvFor`/`resumeIdArgFor` translate it into the
+     * correct resume flag for THIS agent. Without it, a mode change or a
+     * respawn starts a FRESH conversation and the user loses the thread.
+     *
+     * Currently mapped (only flags verified against the real CLI):
+     *  - antigravity -> `--resume <id>`   (Mobile-Harness `antigravityCommand`)
+     *  - codex       -> `--thread-id <id>` (unverified; see note)
+     *  - claude      -> `--session-id <id>`(unverified; see note)
+     *  - opencode    -> `--resume <id>`   (unverified; see note)
+     *  - dsh         -> n/a (uses a settings.yaml key, not a flag)
+     * The unverified entries are intentionally NOT emitted yet — a wrong flag
+     * makes the child exit non-zero at boot. Wire them in once the CLI flag is
+     * confirmed against `--help`; the field + dispatch below already accept them.
+     */
+    val resumeId: String? = null,
 )
 
 /**
@@ -564,6 +584,24 @@ object AgentCatalog {
             return if (effort != null) base.copy(effort = effort) else base
         }
 
+        /**
+         * Resume flag for this agent, or null when unverified/has-no-flag.
+         *
+         * Mobile-Harness `bindResume` maps each CLI's conversation id to a
+         * different field/flag (claude=sessionId, codex=threadId,
+         * opencode/antigravity/hermes/omp/devin=cliSessionId, antigravity=conversationId).
+         * Only antigravity's `--resume` is confirmed against the real CLI
+         * (`antigravityCommand`); the others are held back until verified against
+         * `--help` to avoid a non-zero exit at boot.
+         */
+        fun resumeIdArgFor(id: String): String? = when (id) {
+            "antigravity" -> "--resume"
+            "codex" -> "--thread-id"      // unverified
+            "claude" -> "--session-id"   // unverified
+            "opencode" -> "--resume"     // unverified
+            else -> null                 // dsh uses a settings.yaml key, not a flag
+        }
+
         /** Real argv for [bundle], or empty when the agent has no such knobs. */
         fun argvFor(id: String, bundle: ControlBundle): List<String> = when (specFor(id)?.id) {
             "codex" -> {
@@ -601,10 +639,16 @@ object AgentCatalog {
             }
             "antigravity" -> {
                 // agy: --mode plan|headless|accept-edits, --effort, model via -m.
+                // Resume id (Mobile-Harness `antigravityCommand`): --resume <convId>,
+                // captured from the agent's `Initialized` event and persisted per
+                // session so a mode change or respawn resumes instead of restarting.
                 val args = ArrayList<String>()
                 bundle.model?.let { if (it.isNotBlank()) args += listOf("-m", it) }
                 bundle.mode?.let { if (it.isNotBlank()) args += listOf("--mode", it) }
                 bundle.effort?.let { if (it.isNotBlank()) args += listOf("--effort", it) }
+                resumeIdArgFor("antigravity")?.let { flag ->
+                    bundle.resumeId?.let { if (it.isNotBlank()) args += listOf(flag, it) }
+                }
                 args
             }
             "opencode" -> {

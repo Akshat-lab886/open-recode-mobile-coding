@@ -555,6 +555,18 @@ object AgentRuntime {
         put("TERM", "xterm-256color")
         // Keep child traffic on-device: the UI is served via loopback only.
         put("NO_UPDATE_CHECK", "1")
+        // Mobile-Harness ports these four from its RuntimeLaunchConfigBuilder base
+        // (all bridges get them). Each one is a background network/sync call the
+        // agent CLI makes on startup that is worthless inside PRoot on a phone and
+        // costs noticeably longer boot time. Copied verbatim from the upstream spec:
+        //   DISABLE_AUTOUPDATER  — stop the CLI self-checking npm/PyPI for updates
+        //   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC  — Claude Code telemetry/pings
+        //   DISABLE_TELEMETRY  — generic opt-out honored by most CLIs
+        //   DISABLE_ERROR_REPORTING  — skip crash-report backhaul
+        put("DISABLE_AUTOUPDATER", "1")
+        put("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
+        put("DISABLE_TELEMETRY", "1")
+        put("DISABLE_ERROR_REPORTING", "1")
         if (!insideProot) {
             // The bundled bionic Node. All three of these are required and all
             // three fail silently-or-confusingly without them:
