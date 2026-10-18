@@ -1,6 +1,10 @@
 package com.dsh.mobile.ui
 
 import androidx.compose.foundation.background
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -84,6 +89,27 @@ fun ComposerBar(
         }
         candidates = list
     }
+    // Voice input via the platform recognizer. Availability is checked up front
+    // so the mic button can simply be absent on a device with no recognizer,
+    // rather than launching an intent that resolves to nothing and looks broken.
+    val speechAvailable = remember {
+        val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+        context.packageManager.resolveActivity(i, 0) != null
+    }
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spoken = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                ?.trim()
+            if (!spoken.isNullOrEmpty()) {
+                text = if (text.isBlank()) spoken else "${text.trimEnd()} $spoken"
+            }
+        }
+    }
+
     val mentionMatches: List<String> = remember(activeMention, candidates) {
         val token = activeMention ?: return@remember emptyList()
         ContextMentions.complete(candidates, token)
@@ -210,6 +236,25 @@ fun ComposerBar(
                 modifier = Modifier.weight(1f),
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
+            if (speechAvailable) {
+                IconButton(
+                    onClick = {
+                        runCatching {
+                            speechLauncher.launch(
+                                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                    putExtra(
+                                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                                    )
+                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Dictate a message")
+                                }
+                            )
+                        }
+                    },
+                ) {
+                    Icon(Icons.Default.Mic, contentDescription = "Voice input")
+                }
+            }
             IconButton(
                 onClick = {
                     val out = when (val r = SlashCommands.resolve(text)) {
