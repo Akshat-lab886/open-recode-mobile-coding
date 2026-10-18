@@ -143,9 +143,19 @@ class ServiceBootIdempotencyTest {
     fun `an explicit restart always reboots`() {
         val dispatch = service.substringAfter("override fun onStartCommand")
             .substringBefore("return START_STICKY")
+        // Scoped to ACTION_RESTART's own branch: the invariant is that it calls
+        // boot() WITHOUT the idempotency guard, not that it is written on one
+        // line. The branch also resets the stratified-restart budget now, so
+        // pinning the one-liner form would fail for a cosmetic reason.
+        val branch = dispatch.substringAfter("ACTION_RESTART ->")
+            .substringBefore("ACTION_ATTACH ->")
         assertTrue(
-            "ACTION_RESTART must bypass the idempotency guard:\n$dispatch",
-            Regex("""ACTION_RESTART ->\s*boot\(\)""").containsMatchIn(dispatch),
+            "ACTION_RESTART must call boot():\n$branch",
+            Regex("""\bboot\(\)""").containsMatchIn(branch),
+        )
+        assertFalse(
+            "ACTION_RESTART must bypass the idempotency guard:\n$branch",
+            branch.contains("isAlreadyServing"),
         )
     }
 

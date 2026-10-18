@@ -77,6 +77,13 @@ class AgentRuntimeService : LifecycleService() {
 
     /** Epoch ms when the current agent went Running; 0 when nothing is running. */
     private var startedAt: Long = 0L
+
+    /**
+     * Consecutive restarts that died within [RestartBackoff.FAST_EXIT_MS].
+     * Reset by a run that survives startup and by an explicit user restart.
+     */
+    @Volatile
+    private var consecutiveFastExits: Int = 0
     private var gateway: VisualGateway? = null
 
     private val _status = MutableStateFlow<ServiceStatus>(ServiceStatus.Idle)
@@ -132,7 +139,12 @@ class AgentRuntimeService : LifecycleService() {
                 if (isAlreadyServing()) refreshStatus() else boot()
             }
             // A restart is an explicit user action and always takes effect.
-            ACTION_RESTART -> boot()
+            ACTION_RESTART -> {
+                // An explicit user restart gets a fresh budget: they may have
+                // just fixed the thing that was crashing.
+                consecutiveFastExits = 0
+                boot()
+            }
             // Observe only. A live child keeps running and a dead one is left
             // dead - EngineWatchdog owns recovery, so this never races it.
             ACTION_ATTACH -> {
@@ -540,9 +552,39 @@ private suspend fun isAlreadyServing(): Boolean {
                     if (!isActive) return@launch
                     throw e
                 }
-                Log.w(TAG, "agent exited ($exit) — restarting with backoff")
-                setStatus(ServiceStatus.Booting("Agent exited — restarting…"))
-                delay(RESTART_BACKOFF_MS)
+                // Stratified restart (Mobile-Harness RETRY_CONFIG): a run that
+                // survived its startup is healthy and resets the loop, while a
+                // run that died instantly counts toward giving up rather than
+                // restarting every 5s forever.
+                val ranFor = System.currentTimeMillis() - startedAt
+                consecutiveFastExits =
+                    if (ranFor >= RestartBackoff.FAST_EXIT_MS) 0 else consecutiveFastExits + 1
+                if (RestartBackoff.shouldGiveUp(consecutiveFastExits)) {
+                    Log.e(
+                        TAG,
+                        "agent exited $consecutiveFastExits times within " +
+                            "${RestartBackoff.FAST_EXIT_MS}ms - giving up",
+                    )
+                    updateNotification("Agent keeps exiting on startup")
+                    setStatus(
+                        ServiceStatus.Error(
+                            "The agent keeps exiting right after it starts. " +
+                                "Check its keys and logs, then restart.",
+                            // Not retryable: retrying immediately fails the same
+                            // way until the user changes something.
+                            retryable = false,
+                        ),
+                    )
+                    return@launch
+                }
+                val waitMs = RestartBackoff.delayFor(consecutiveFastExits, ranFor)
+                Log.w(
+                    TAG,
+                    "agent exited ($exit) after ${ranFor}ms - restart " +
+                        "#$consecutiveFastExits in ${waitMs}ms",
+                )
+                setStatus(ServiceStatus.Booting("Agent exited - restarting..."))
+                delay(waitMs)
                 boot()
             } catch (e: Exception) {
                 Log.e(TAG, "boot failed", e)
@@ -815,6 +857,5 @@ private suspend fun isAlreadyServing(): Boolean {
         private const val TAG = "AgentRuntimeService"
         private const val CHANNEL_ID = "agent_runtime"
         private const val NOTIFICATION_ID = 41
-        private const val RESTART_BACKOFF_MS = 5_000L
     }
 }
