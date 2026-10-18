@@ -454,7 +454,8 @@ private fun CompactLayout(
                 // Only Chat hosts the live agent surface. The other tabs are
                 // native views over the workspace, so mounting the WebView for
                 // them would burn battery behind a screen the user cannot see.
-                DeckTab.CHAT -> AgentStage(
+                DeckTab.CHAT -> Column(Modifier.weight(1f).fillMaxSize()) {
+                AgentStage(
                 uiState = uiState,
                 layout = layout,
                 onWebApproval = onWebApproval,
@@ -468,6 +469,11 @@ private fun CompactLayout(
                     .weight(1f)
                     .imePadding(),
                 )
+                    // Native composer under the agent surface. imePadding on the
+                    // stage, not here: the bar must stay put while the field
+                    // takes focus, or the layout jumps on every keystroke.
+                    ComposerBar(onSend = onCommand)
+                }
                 // Native tab surfaces (one per round as they are built).
                 DeckTab.DIFFS -> DiffsPane(
                     configuredWorkspacePath = uiState.config.workspacePath,
@@ -611,13 +617,16 @@ private fun ExpandedLayout(
                     )
                 }
                 when (deckTab) {
-                    DeckTab.CHAT -> AgentStage(
-                        uiState = uiState,
-                        layout = layout,
-                        onWebApproval = onWebApproval,
-                        onRetryBoot = onRetryBoot,
-                        modifier = Modifier.fillMaxSize().imePadding(),
-                    )
+                    DeckTab.CHAT -> Column(Modifier.fillMaxSize()) {
+                        AgentStage(
+                            uiState = uiState,
+                            layout = layout,
+                            onWebApproval = onWebApproval,
+                            onRetryBoot = onRetryBoot,
+                            modifier = Modifier.weight(1f).imePadding(),
+                        )
+                        ComposerBar(onSend = onCommand)
+                    }
                     DeckTab.DIFFS -> DiffsPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
                         modifier = Modifier.fillMaxSize(),
