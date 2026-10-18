@@ -1,5 +1,6 @@
 package com.dsh.mobile.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.activity.compose.BackHandler
@@ -25,8 +26,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -64,7 +72,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -336,31 +346,25 @@ private fun CompactLayout(
         topBar = {
             TopAppBar(
                 title = {
-                    ShellTitle(
+                    AgentHeroTitle(
                         displayedAgent(uiState.config.agent, uiState.serviceStatus),
                         uiState.serviceStatus,
+                        modeLabel = uiState.config.mode.label,
+                        effort = uiState.config.effort,
                         compact = true,
                     )
                 },
                 actions = {
-                    IconButton(onClick = onTapStatus) {
-                        // StatusDot is a Box, not an Icon, so it contributes no
-                        // semantics of its own and this button would otherwise be
-                        // announced as an unlabelled control.
-                        Box(
-                            Modifier.semantics {
-                                contentDescription = "Engine status (tap 5 times for logs)"
-                            },
-                        ) {
-                            StatusDot(uiState.serviceStatus)
-                        }
-                    }
+                    StatusCapsule(uiState.serviceStatus, onClick = onTapStatus)
+                    Spacer(Modifier.width(DshTheme.tokens.spaceXs))
                     IconButton(onClick = onOpenControlCenter) {
                         Icon(Icons.Default.Settings, contentDescription = "Control Center")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    // Mobile-Harness keeps the hero bar transparent so the stage
+                    // reads as the page, not as a card under a toolstrip.
+                    containerColor = MaterialTheme.colorScheme.background,
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
                 // No statusBarsPadding(): TopAppBar already applies
@@ -648,9 +652,11 @@ private fun StatusPanel(
                 .padding(horizontal = tokens.spaceLg, vertical = tokens.spaceXl),
             verticalArrangement = Arrangement.spacedBy(tokens.spaceLg),
         ) {
-            ShellTitle(
+            AgentHeroTitle(
                 displayedAgent(uiState.config.agent, uiState.serviceStatus),
                 uiState.serviceStatus,
+                modeLabel = uiState.config.mode.label,
+                effort = uiState.config.effort,
                 compact = false,
             )
             Spacer(Modifier.height(tokens.spaceXs))
@@ -775,52 +781,124 @@ internal fun displayedAgent(
     (status as? AgentRuntimeService.ServiceStatus.Running)?.agent ?: configured
 
 /**
- * App-bar identity.
+ * Per-agent glyph for the status-hero pill.
  *
- * Compact shows the agent alone - that is what the user picked and the only
- * thing that fits in a phone-width bar. Expanded shows the product name,
- * because the panel is about the app rather than one backend. The subtitle
- * carries live state on both, so the bar is never just decoration.
+ * One icon per backend, so which engine is live is legible at a glance without
+ * reading the label - the same job Mobile-Harness's 34dp agent pill does.
+ */
+private fun agentHeroIcon(agent: ActiveAgent): ImageVector = when (agent) {
+    ActiveAgent.DEEPSEEK_HARNESS -> Icons.Default.SmartToy
+    ActiveAgent.CLAUDE_CODE -> Icons.Default.AutoAwesome
+    ActiveAgent.CODEX -> Icons.Default.Terminal
+    ActiveAgent.OPENCODE -> Icons.Default.Code
+    ActiveAgent.HERMES -> Icons.Default.Hub
+    ActiveAgent.ANTIGRAVITY -> Icons.Default.Memory
+}
+
+/**
+ * Mobile-Harness-style status hero: a 34dp agent-icon pill beside a two-line
+ * title.
+ *
+ * The subtitle carries the control state the session is ACTUALLY running under
+ * (mode, and effort when the harness has one), because that is the thing a user
+ * changes and then cannot see. Deliberately sparse: the bar answers "which
+ * agent, in what mode" and nothing else - every other control stays in the
+ * Control Centre, which is what keeps the phone layout from becoming a wall of
+ * chips.
  */
 @Composable
-private fun ShellTitle(
+private fun AgentHeroTitle(
     agent: ActiveAgent,
     status: AgentRuntimeService.ServiceStatus,
+    modeLabel: String,
+    effort: String?,
     compact: Boolean,
 ) {
-    Column {
-        Text(
-            if (compact) agent.label else "DSH Mobile",
-            style = MaterialTheme.typography.titleMedium,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(
-            buildString {
-                append(statusLabel(status))
-                (status as? AgentRuntimeService.ServiceStatus.Running)?.let { append(" · :${it.port}") }
-                if (!compact) append(" · ${agent.label}")
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    val accent = MaterialTheme.colorScheme.primary
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = accent.copy(alpha = 0.12f),
+            border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+            modifier = Modifier.size(34.dp),
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    agentHeroIcon(agent),
+                    // Decorative: the label beside it already names the agent.
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(DshTheme.tokens.spaceSm))
+        Column {
+            Text(
+                if (compact) agent.label else "DSH Mobile",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                buildString {
+                    append(modeLabel)
+                    if (!effort.isNullOrBlank()) {
+                        append(" · ").append(effort.replaceFirstChar { it.uppercase() })
+                    }
+                    if (!compact) append(" · ").append(agent.label)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
+/**
+ * The live-status capsule (Mobile-Harness's status pill): a tinted
+ * `RoundedCornerShape(50)` pill holding a state dot and a short label.
+ *
+ * Replaces the old bare status dot IconButton. Tapping it still runs the
+ * 5-tap-to-diagnostics gesture, so that affordance is preserved rather than
+ * removed - the capsule makes it discoverable instead of hiding it in an
+ * unlabelled dot.
+ */
 @Composable
-private fun StatusDot(status: AgentRuntimeService.ServiceStatus) {
-    Box(
-        Modifier
-            .size(DshTheme.tokens.minTouchTarget),
-        contentAlignment = Alignment.Center,
+private fun StatusCapsule(
+    status: AgentRuntimeService.ServiceStatus,
+    onClick: () -> Unit,
+) {
+    val tone = statusColor(status)
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = tone.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, tone.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .heightIn(min = 34.dp)
+            .semantics { contentDescription = "Engine status (tap 5 times for logs)" },
     ) {
-        Box(
-            Modifier
-                .size(11.dp)
-                .background(statusColor(status), CircleShape),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .background(tone, CircleShape),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                statusLabel(status),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+            )
+        }
     }
 }
 
