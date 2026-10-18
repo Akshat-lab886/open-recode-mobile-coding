@@ -136,6 +136,9 @@ fun DshMobileShell(
     var showControlCenter by rememberSaveable { mutableStateOf(false) }
     var showDiagnostics by rememberSaveable { mutableStateOf(false) }
     var accessoryExpanded by rememberSaveable { mutableStateOf(false) }
+    // The Deck's selected top-level destination. Saveable so a rotation or a
+    // process death returns to the tab the user was actually working in.
+    var deckTab by rememberSaveable { mutableStateOf(DeckTab.CHAT) }
     var diagTaps by remember { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -197,6 +200,13 @@ fun DshMobileShell(
                 uiState = uiState,
                 layout = layout,
                 panelMode = if (showControlCenter) PanelMode.CONTROL_CENTER else PanelMode.STATUS,
+                deckTab = deckTab,
+                onDeckTabSelected = { tab ->
+                    deckTab = tab
+                    // Settings is the one Deck tab that is an existing surface,
+                    // not a new one: it IS the Control Center.
+                    if (tab == DeckTab.SETTINGS) showControlCenter = true
+                },
                 onOpenControlCenter = { showControlCenter = true },
                 onCloseControlCenter = { showControlCenter = false },
                 onOpenDiagnostics = { showDiagnostics = true },
@@ -224,6 +234,13 @@ fun DshMobileShell(
             CompactLayout(
                 uiState = uiState,
                 layout = layout,
+                deckTab = deckTab,
+                onDeckTabSelected = { tab ->
+                    deckTab = tab
+                    // Settings is the one Deck tab that is an existing surface,
+                    // not a new one: it IS the Control Center.
+                    if (tab == DeckTab.SETTINGS) showControlCenter = true
+                },
                 onOpenControlCenter = { showControlCenter = true },
                 onTapStatus = {
                     diagTaps++
@@ -327,6 +344,8 @@ private enum class PanelMode { STATUS, CONTROL_CENTER }
 private fun CompactLayout(
     uiState: ControlCenterState,
     layout: AdaptiveLayout,
+    deckTab: DeckTab,
+    onDeckTabSelected: (DeckTab) -> Unit,
     onOpenControlCenter: () -> Unit,
     onTapStatus: () -> Unit,
     onRetryBoot: () -> Unit,
@@ -374,19 +393,25 @@ private fun CompactLayout(
             )
         },
         bottomBar = {
-            // Context-aware accessory bar: only when the keyboard is up.
-            if (imeVisible) {
-                InputAccessoryBar(
-                    workspacePath = uiState.config.workspacePath,
-                    onCommand = onCommand,
-                    onInsertPath = onInsertPath,
-                    expanded = accessoryExpanded,
-                    onToggleExpanded = onToggleAccessory,
-                    // imePadding(), not just navigationBarsPadding(): while the
-                    // keyboard is up the navigation-bar inset is ~0, so the bar
-                    // was docking behind the IME instead of above it.
-                    modifier = Modifier.imePadding().navigationBarsPadding(),
-                )
+            Column {
+                // Context-aware accessory bar: only when the keyboard is up. It
+                // sits ABOVE the deck nav so the composer is always reachable.
+                if (imeVisible) {
+                    InputAccessoryBar(
+                        workspacePath = uiState.config.workspacePath,
+                        onCommand = onCommand,
+                        onInsertPath = onInsertPath,
+                        expanded = accessoryExpanded,
+                        onToggleExpanded = onToggleAccessory,
+                        // imePadding(), not just navigationBarsPadding(): while the
+                        // keyboard is up the navigation-bar inset is ~0, so the bar
+                        // was docking behind the IME instead of above it.
+                        modifier = Modifier.imePadding().navigationBarsPadding(),
+                    )
+                }
+                // The Deck's eight destinations. Always present: it is the app's
+                // primary structure now, not a panel behind a gesture.
+                DeckNavBar(selected = deckTab, onSelect = onDeckTabSelected)
             }
         },
     ) { padding ->
@@ -405,7 +430,11 @@ private fun CompactLayout(
                     )
                 }
             }
-            AgentStage(
+            when (deckTab) {
+                // Only Chat hosts the live agent surface. The other tabs are
+                // native views over the workspace, so mounting the WebView for
+                // them would burn battery behind a screen the user cannot see.
+                DeckTab.CHAT -> AgentStage(
                 uiState = uiState,
                 layout = layout,
                 onWebApproval = onWebApproval,
@@ -418,7 +447,14 @@ private fun CompactLayout(
                 modifier = Modifier
                     .weight(1f)
                     .imePadding(),
-            )
+                )
+                // Native tab placeholders (filled in one per round below).
+                else -> DeckTabPlaceholder(
+                    tab = deckTab,
+                    uiState = uiState,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
     }
 }
@@ -430,6 +466,8 @@ private fun ExpandedLayout(
     uiState: ControlCenterState,
     layout: AdaptiveLayout,
     panelMode: PanelMode,
+    deckTab: DeckTab,
+    onDeckTabSelected: (DeckTab) -> Unit,
     onOpenControlCenter: () -> Unit,
     onCloseControlCenter: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -458,18 +496,21 @@ private fun ExpandedLayout(
         snackbarHost = { SnackbarHost(snackbar) },
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (imeVisible) {
-                InputAccessoryBar(
-                    workspacePath = uiState.config.workspacePath,
-                    onCommand = onCommand,
-                    onInsertPath = onInsertPath,
-                    expanded = accessoryExpanded,
-                    onToggleExpanded = onToggleAccessory,
-                    // imePadding(), not just navigationBarsPadding(): while the
-                    // keyboard is up the navigation-bar inset is ~0, so the bar
-                    // was docking behind the IME instead of above it.
-                    modifier = Modifier.imePadding().navigationBarsPadding(),
-                )
+            Column {
+                if (imeVisible) {
+                    InputAccessoryBar(
+                        workspacePath = uiState.config.workspacePath,
+                        onCommand = onCommand,
+                        onInsertPath = onInsertPath,
+                        expanded = accessoryExpanded,
+                        onToggleExpanded = onToggleAccessory,
+                        // imePadding(), not just navigationBarsPadding(): while the
+                        // keyboard is up the navigation-bar inset is ~0, so the bar
+                        // was docking behind the IME instead of above it.
+                        modifier = Modifier.imePadding().navigationBarsPadding(),
+                    )
+                }
+                DeckNavBar(selected = deckTab, onSelect = onDeckTabSelected)
             }
         },
     ) { padding ->
@@ -525,13 +566,20 @@ private fun ExpandedLayout(
                             .padding(DshTheme.tokens.spaceMd),
                     )
                 }
-                AgentStage(
-                    uiState = uiState,
-                    layout = layout,
-                    onWebApproval = onWebApproval,
-                    onRetryBoot = onRetryBoot,
-                    modifier = Modifier.fillMaxSize().imePadding(),
-                )
+                when (deckTab) {
+                    DeckTab.CHAT -> AgentStage(
+                        uiState = uiState,
+                        layout = layout,
+                        onWebApproval = onWebApproval,
+                        onRetryBoot = onRetryBoot,
+                        modifier = Modifier.fillMaxSize().imePadding(),
+                    )
+                    else -> DeckTabPlaceholder(
+                        tab = deckTab,
+                        uiState = uiState,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
     }
