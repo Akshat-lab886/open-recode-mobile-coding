@@ -123,4 +123,49 @@ class WorkspaceTreeTest {
         assertEquals("1.0 KB", WorkspaceTree.formatSize(1024))
         assertEquals("1.0 MB", WorkspaceTree.formatSize(1024L * 1024))
     }
+
+    @Test
+    fun `findByExtension matches case-insensitively and ignores the dot`() {
+        write("a.HTML")
+        write("b.htm")
+        write("c.txt")
+        val found = WorkspaceTree.findByExtension(tmp.root, setOf("html", ".htm")).map { it.name }
+        assertEquals(setOf("a.HTML", "b.htm"), found.toSet())
+    }
+
+    @Test
+    fun `findByExtension descends into folders but skips noise`() {
+        write("dist/out.html")
+        write("node_modules/p/i.html")
+        write("site/index.html")
+        val found = WorkspaceTree.findByExtension(tmp.root, WorkspaceTree.PREVIEWABLE).map { it.name }
+        assertEquals(listOf("index.html"), found)
+    }
+
+    @Test
+    fun `findByExtension returns newest first`() {
+        val old = write("old.html"); old.setLastModified(1_000_000L)
+        val mid = write("mid.html"); mid.setLastModified(2_000_000L)
+        val new = write("new.html"); new.setLastModified(3_000_000L)
+        assertEquals(
+            listOf("new.html", "mid.html", "old.html"),
+            WorkspaceTree.findByExtension(tmp.root, WorkspaceTree.PREVIEWABLE).map { it.name },
+        )
+    }
+
+    @Test
+    fun `findByExtension honours the limit and handles empty input`() {
+        repeat(6) { write("f$it.html") }
+        assertEquals(2, WorkspaceTree.findByExtension(tmp.root, WorkspaceTree.PREVIEWABLE, limit = 2).size)
+        assertTrue(WorkspaceTree.findByExtension(tmp.root, emptySet()).isEmpty())
+    }
+
+    @Test
+    fun `artifact extensions include reports and images`() {
+        assertTrue("md" in WorkspaceTree.ARTIFACT_EXTENSIONS)
+        assertTrue("png" in WorkspaceTree.ARTIFACT_EXTENSIONS)
+        write("plan.md"); write("out.txt")
+        val found = WorkspaceTree.findByExtension(tmp.root, WorkspaceTree.ARTIFACT_EXTENSIONS).map { it.name }
+        assertEquals(setOf("plan.md", "out.txt"), found.toSet())
+    }
 }

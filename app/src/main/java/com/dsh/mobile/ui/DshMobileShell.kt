@@ -337,6 +337,26 @@ fun DshMobileShell(
 
 private enum class PanelMode { STATUS, CONTROL_CENTER }
 
+/**
+ * Shown if the Settings tab is rendered without the Control Center being open.
+ *
+ * On a phone Settings opens the Control Center as a sheet, and on a tablet it
+ * takes over the side panel - both handled above. This composable exists so the
+ * `when` is exhaustive over [DeckTab] with no dead branch, and so a future
+ * layout that reaches this state says something honest instead of rendering an
+ * empty screen.
+ */
+@Composable
+private fun SettingsRelocatedNote(modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Text(
+            "Settings is the Control Center.\nIt opens alongside this panel.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
 // -- Compact / Medium ---------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -461,11 +481,23 @@ private fun CompactLayout(
                     configuredWorkspacePath = uiState.config.workspacePath,
                     modifier = Modifier.weight(1f),
                 )
-                else -> DeckTabPlaceholder(
-                    tab = deckTab,
+                DeckTab.TASKS -> TasksPane(
                     uiState = uiState,
                     modifier = Modifier.weight(1f),
                 )
+                DeckTab.ARTIFACTS -> ArtifactsPane(
+                    configuredWorkspacePath = uiState.config.workspacePath,
+                    modifier = Modifier.weight(1f),
+                )
+                DeckTab.PREVIEW -> PreviewPane(
+                    configuredWorkspacePath = uiState.config.workspacePath,
+                    modifier = Modifier.weight(1f),
+                )
+                // Settings is the one Deck tab that is an existing surface: the
+                // Control Center, which opens as a side panel on tablet and as a
+                // sheet on phone. This branch is the honest statement that there
+                // is no separate native pane, rather than a dead placeholder.
+                DeckTab.SETTINGS -> SettingsRelocatedNote(modifier = Modifier.weight(1f))
             }
         }
     }
@@ -598,11 +630,19 @@ private fun ExpandedLayout(
                         configuredWorkspacePath = uiState.config.workspacePath,
                         modifier = Modifier.fillMaxSize(),
                     )
-                    else -> DeckTabPlaceholder(
-                        tab = deckTab,
+                    DeckTab.TASKS -> TasksPane(
                         uiState = uiState,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    DeckTab.ARTIFACTS -> ArtifactsPane(
+                        configuredWorkspacePath = uiState.config.workspacePath,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    DeckTab.PREVIEW -> PreviewPane(
+                        configuredWorkspacePath = uiState.config.workspacePath,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    DeckTab.SETTINGS -> SettingsRelocatedNote(modifier = Modifier.fillMaxSize())
                 }
             }
         }

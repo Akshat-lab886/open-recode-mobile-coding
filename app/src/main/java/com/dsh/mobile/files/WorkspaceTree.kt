@@ -109,6 +109,58 @@ object WorkspaceTree {
         return String(bytes)
     }
 
+
+    /**
+     * Finds files with any of [extensions] (case-insensitive, without the dot),
+     * newest first.
+     *
+     * Shared by the Artifacts tab (reports/plans the agent wrote) and the
+     * Preview tab (HTML it can render). Newest-first because the artifact the
+     * user just asked for is almost always the one they want to see, and
+     * walking a large workspace alphabetically to find it is pointless.
+     */
+    fun findByExtension(
+        root: File,
+        extensions: Set<String>,
+        limit: Int = 100,
+    ): List<FileEntry> {
+        if (extensions.isEmpty() || !root.isDirectory) return emptyList()
+        val wanted = extensions.map { it.removePrefix(".").lowercase() }.toSet()
+        val out = ArrayList<FileEntry>()
+        val stack = ArrayDeque<File>()
+        stack.addLast(root)
+        var depth = 0
+        while (stack.isNotEmpty() && out.size < limit) {
+            val dir = stack.removeLast()
+            if (depth++ > 12) continue
+            val children = dir.listFiles() ?: continue
+            for (child in children.sortedBy { it.name }) {
+                if (child.isDirectory) {
+                    if (!WorkspaceDiff.shouldSkipDir(child.name)) stack.addLast(child)
+                } else {
+                    val ext = child.extension.lowercase()
+                    if (ext in wanted) {
+                        out += FileEntry(
+                            name = child.name,
+                            path = child.absolutePath.removePrefix(root.absolutePath).trimStart('/'),
+                            isDirectory = false,
+                            sizeBytes = child.length(),
+                            modifiedAt = child.lastModified(),
+                        )
+                        if (out.size >= limit) break
+                    }
+                }
+            }
+        }
+        return out.sortedByDescending { it.modifiedAt }
+    }
+
+    /** Renderable web entry points for the Preview tab. */
+    val PREVIEWABLE: Set<String> = setOf("html", "htm")
+
+    /** What counts as an artifact the agent produced. */
+    val ARTIFACT_EXTENSIONS: Set<String> = setOf("md", "json", "txt", "png", "jpg", "jpeg", "svg", "html")
+
     /** "1.2 KB" style label; null-ish sizes render as a dash rather than "0 B". */
     fun formatSize(bytes: Long): String = when {
         bytes < 1024 -> "$bytes B"
