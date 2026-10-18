@@ -26,6 +26,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.dsh.mobile.files.WorkspaceTree
+import com.dsh.mobile.preview.PreviewNavigation
 import com.dsh.mobile.runtime.AgentRuntime
 import com.dsh.mobile.ui.theme.DshTheme
 import java.io.File
@@ -125,12 +126,17 @@ fun PreviewPane(
                     settings.allowFileAccess = true
                     settings.allowContentAccess = true
                     webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(view: WebView, request: android.webkit.WebResourceRequest): Boolean =
-                            // Keep the preview inside the workspace: a page that
-                            // links to the internet cannot reach it from a device
-                            // with no DNS anyway, and following it would strand
-                            // the user in a dead page with no way back but restart.
-                            true
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView,
+                            request: android.webkit.WebResourceRequest,
+                        ): Boolean =
+                            // Follow links that stay inside the workspace - a real
+                            // preview has internal navigation, and blocking every
+                            // link made anything but a single self-contained file
+                            // useless. Everything else (http, content, traversal
+                            // out of the workspace) is blocked, which also keeps
+                            // the user from being stranded on a dead page.
+                            !PreviewNavigation.allow(request.url?.toString(), workspace)
                     }
                     loadUrl("file://${chosen.absolutePath}")
                 }
