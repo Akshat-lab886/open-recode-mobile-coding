@@ -41,6 +41,13 @@ class DshMobileApp : Application() {
     /** Which agents the user chose to install, and whether that happened. */
     lateinit var agentInstalls: com.dsh.mobile.data.AgentInstallStore
 
+    /**
+     * Last conversation id each agent reported, so a mode change / respawn can
+     * resume that conversation instead of starting fresh (Mobile-Harness
+     * `bindResume`). Capture: ResumeIdParser; argv: ControlAdapter.resumeIdArgFor.
+     */
+    lateinit var resumeIds: com.dsh.mobile.data.ResumeIdStore
+
     /** On-demand npm installer for the agents the user picked. */
     lateinit var agentInstaller: com.dsh.mobile.runtime.AgentInstaller
 
@@ -68,6 +75,7 @@ class DshMobileApp : Application() {
         sessionHistory = com.dsh.mobile.data.SessionHistoryStore(this)
         perAgentProviders = com.dsh.mobile.security.PerAgentProviderStore(this, vault)
         agentInstalls = com.dsh.mobile.data.AgentInstallStore(this)
+        resumeIds = com.dsh.mobile.data.ResumeIdStore(this)
         agentInstaller = com.dsh.mobile.runtime.AgentInstaller(this)
         watchdog = EngineWatchdog(
             onRestart = {

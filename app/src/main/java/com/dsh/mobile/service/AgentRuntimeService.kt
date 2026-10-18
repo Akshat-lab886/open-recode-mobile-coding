@@ -19,6 +19,7 @@ import com.dsh.mobile.data.RuntimeConfig
 import com.dsh.mobile.proxy.VisualGateway
 import com.dsh.mobile.runtime.AgentModelSettings
 import com.dsh.mobile.runtime.AgentRuntime
+import com.dsh.mobile.runtime.ResumeIdParser
 import com.dsh.mobile.runtime.RuntimePayloadState
 import com.dsh.mobile.ui.AgentServiceStatusFlow
 import com.dsh.mobile.ui.GatewayEventBus
@@ -372,6 +373,11 @@ private suspend fun isAlreadyServing(): Boolean {
                 // 3. Spawn the agent bound to loopback.
                 Log.i(TAG, "boot: spawning; node=${AgentRuntime.nodeBinary(this@AgentRuntimeService).absolutePath}")
                 setStatus(ServiceStatus.Booting("Booting ${agent.label}…"))
+                // Resume: feed the conversation id captured on a previous run
+                // (Mobile-Harness `bindResume`) so a mode change or a respawn
+                // continues the thread instead of starting fresh. Null on a
+                // first run, or for an agent whose resume flag is unverified.
+                val storedResumeId = app.resumeIds.get(agent.id)
                 val command = AgentRuntime.buildCommand(
                     context = this@AgentRuntimeService,
                     agent = agent,
@@ -383,7 +389,7 @@ private suspend fun isAlreadyServing(): Boolean {
                     // are presets (settings.yaml, handled in the boot path), not argv.
                     control = AgentCatalog.ControlAdapter.bundleForMode(
                         agent.id, config.mode, config.effort,
-                    ),
+                    ).copy(resumeId = storedResumeId),
                 )
                 Log.i(TAG, "exec: ${command.joinToString(" ")}")
 
@@ -436,8 +442,20 @@ private suspend fun isAlreadyServing(): Boolean {
                 }
                 child = process
 
+                // Capture the agent's own conversation id while teeing stdout,
+                // so the NEXT boot can resume it. ResumeIdParser is pure and
+                // per-agent; a miss simply means the next boot starts fresh.
+                val capturedResumeId = AtomicReference<String?>(null)
                 AgentLaunch.pump(process.inputStream, logFile, launchUrl) { line ->
                     Log.d(TAG, "[agent] ${AgentLaunch.redactUrl(line)}")
+                    ResumeIdParser.extractResumeId(agent.id, line)?.let { id ->
+                        if (capturedResumeId.getAndSet(id) != id) {
+                            Log.i(TAG, "resume: captured ${agent.id} conversation id")
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                app.resumeIds.set(agent.id, id)
+                            }
+                        }
+                    }
                 }
                 // stderr is appended to the same log so diagnostics see it.
                 AgentLaunch.pump(process.errorStream, logFile) { line ->
