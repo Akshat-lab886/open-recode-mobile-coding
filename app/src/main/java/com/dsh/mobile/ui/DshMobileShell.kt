@@ -139,6 +139,10 @@ fun DshMobileShell(
     // The Deck's selected top-level destination. Saveable so a rotation or a
     // process death returns to the tab the user was actually working in.
     var deckTab by rememberSaveable { mutableStateOf(DeckTab.CHAT) }
+    // Set by Diffs' "Open" action, consumed by Files. Not saveable: a pending
+    // cross-tab jump is meaningless after the process dies, and restoring it
+    // would yank the user into Files on next launch.
+    var filesRevealPath by remember { mutableStateOf<String?>(null) }
     var diagTaps by remember { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -201,6 +205,11 @@ fun DshMobileShell(
                 layout = layout,
                 panelMode = if (showControlCenter) PanelMode.CONTROL_CENTER else PanelMode.STATUS,
                 deckTab = deckTab,
+                filesRevealPath = filesRevealPath,
+                onOpenInFiles = { path ->
+                    filesRevealPath = path
+                    deckTab = DeckTab.FILES
+                },
                 onDeckTabSelected = { tab ->
                     deckTab = tab
                     // Settings is the one Deck tab that is an existing surface,
@@ -235,6 +244,11 @@ fun DshMobileShell(
                 uiState = uiState,
                 layout = layout,
                 deckTab = deckTab,
+                filesRevealPath = filesRevealPath,
+                onOpenInFiles = { path ->
+                    filesRevealPath = path
+                    deckTab = DeckTab.FILES
+                },
                 onDeckTabSelected = { tab ->
                     deckTab = tab
                     // Settings is the one Deck tab that is an existing surface,
@@ -366,6 +380,8 @@ private fun CompactLayout(
     layout: AdaptiveLayout,
     deckTab: DeckTab,
     onDeckTabSelected: (DeckTab) -> Unit,
+    filesRevealPath: String?,
+    onOpenInFiles: (String) -> Unit,
     onOpenControlCenter: () -> Unit,
     onTapStatus: () -> Unit,
     onRetryBoot: () -> Unit,
@@ -477,10 +493,12 @@ private fun CompactLayout(
                 // Native tab surfaces (one per round as they are built).
                 DeckTab.DIFFS -> DiffsPane(
                     configuredWorkspacePath = uiState.config.workspacePath,
+                    onOpenInFiles = onOpenInFiles,
                     modifier = Modifier.weight(1f),
                 )
                 DeckTab.FILES -> FilesPane(
                     configuredWorkspacePath = uiState.config.workspacePath,
+                    revealPath = filesRevealPath,
                     modifier = Modifier.weight(1f),
                 )
                 DeckTab.TERMINAL -> TerminalPane(
@@ -518,6 +536,8 @@ private fun ExpandedLayout(
     panelMode: PanelMode,
     deckTab: DeckTab,
     onDeckTabSelected: (DeckTab) -> Unit,
+    filesRevealPath: String?,
+    onOpenInFiles: (String) -> Unit,
     onOpenControlCenter: () -> Unit,
     onCloseControlCenter: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -629,10 +649,12 @@ private fun ExpandedLayout(
                     }
                     DeckTab.DIFFS -> DiffsPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
+                        onOpenInFiles = onOpenInFiles,
                         modifier = Modifier.fillMaxSize(),
                     )
                     DeckTab.FILES -> FilesPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
+                        revealPath = filesRevealPath,
                         modifier = Modifier.fillMaxSize(),
                     )
                     DeckTab.TERMINAL -> TerminalPane(

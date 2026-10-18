@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,15 @@ import java.io.File
 @Composable
 fun FilesPane(
     configuredWorkspacePath: String,
+    /**
+     * A workspace-relative path the tab should navigate to, consumed once.
+     *
+     * Set by the Diffs tab when the user taps a changed file: "show me this
+     * file" is the single most common next question after seeing a diff, and
+     * making the user retype the path to get there is exactly the friction a
+     * harness should remove.
+     */
+    revealPath: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -63,6 +73,25 @@ fun FilesPane(
     var dirPath by remember { mutableStateOf("") }
     var preview by remember { mutableStateOf<Pair<String, String>?>(null) }
     var query by remember { mutableStateOf("") }
+    var consumed by remember { mutableStateOf<String?>(null) }
+
+    // Navigate when a NEW reveal arrives. Keyed on the consumed value so it runs
+    // once per request rather than re-running (and yanking the user back) on
+    // every recomposition or when they navigate away and back.
+    LaunchedEffect(revealPath) {
+        val target = revealPath
+        if (target != null && target != consumed) {
+            val parent = WorkspaceTree.parentOf(target)
+            if (parent != null) {
+                dirPath = parent
+                consumed = target
+                query = ""
+                val file = WorkspaceTree.resolve(workspace, target)
+                val text = file?.let { WorkspaceTree.preview(it) }
+                if (text != null) preview = target.substringAfterLast('/') to text
+            }
+        }
+    }
 
     val listing = remember(dirPath, workspace) { WorkspaceTree.list(workspace, dirPath) }
     // Filtering is pure and runs on the in-memory listing, so typing stays

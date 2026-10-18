@@ -68,6 +68,8 @@ private data class DiffsState(
 @Composable
 fun DiffsPane(
     configuredWorkspacePath: String,
+    /** Called with a workspace-relative path when the user taps "Open". */
+    onOpenInFiles: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -138,9 +140,9 @@ fun DiffsPane(
                 val deletedTint = MaterialTheme.colorScheme.error
                 val toggle: (String) -> Unit = { path -> expanded = if (expanded == path) null else path }
                 LazyColumn(Modifier.fillMaxSize()) {
-                    DiffSection("Added", state.changes.added, addedTint, state, expanded, toggle)
-                    DiffSection("Modified", state.changes.modified, modifiedTint, state, expanded, toggle)
-                    DiffSection("Deleted", state.changes.deleted, deletedTint, state, expanded, toggle)
+                    DiffSection("Added", state.changes.added, addedTint, state, expanded, toggle, onOpenInFiles)
+                    DiffSection("Modified", state.changes.modified, modifiedTint, state, expanded, toggle, onOpenInFiles)
+                    DiffSection("Deleted", state.changes.deleted, deletedTint, state, expanded, toggle, onOpenInFiles)
                 }
                 }
             }
@@ -202,6 +204,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.DiffSection(
     state: DiffsState,
     expanded: String?,
     onToggle: (String) -> Unit,
+    onOpenInFiles: (String) -> Unit,
 ) {
     if (paths.isEmpty()) return
     item(key = "hdr-$title") {
@@ -213,13 +216,27 @@ private fun androidx.compose.foundation.lazy.LazyListScope.DiffSection(
         )
     }
     items(paths, key = { "$title/$it" }) { path ->
-        Column(Modifier.fillMaxWidth().clickable { onToggle(path) }) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggle(path) }
+                    .padding(horizontal = DshTheme.tokens.spaceMd, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
             Text(
                 path,
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(horizontal = DshTheme.tokens.spaceMd, vertical = 6.dp),
+                modifier = Modifier.weight(1f),
             )
+            Text(
+                "Open",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onOpenInFiles(path) },
+            )
+            }
             if (expanded == path) {
                 val lines = WorkspaceDiff.diffFile(state.baseline[path], state.current[path])
                 if (lines == null) {
