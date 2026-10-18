@@ -168,4 +168,58 @@ class WorkspaceTreeTest {
         val found = WorkspaceTree.findByExtension(tmp.root, WorkspaceTree.ARTIFACT_EXTENSIONS).map { it.name }
         assertEquals(setOf("plan.md", "out.txt"), found.toSet())
     }
+
+    private fun entry(name: String, path: String = name, dir: Boolean = false) =
+        FileEntry(name, path, dir, 0L, 0L)
+
+    @Test
+    fun `an empty query returns everything unchanged`() {
+        val e = listOf(entry("a.kt"), entry("b.md"))
+        assertEquals(e, WorkspaceTree.filter(e, "   "))
+    }
+
+    @Test
+    fun `filter matches the name case-insensitively`() {
+        val e = listOf(entry("Main.kt"), entry("readme.md"))
+        assertEquals(listOf("Main.kt"), WorkspaceTree.filter(e, "main").map { it.name })
+    }
+
+    @Test
+    fun `filter also matches the path so nested files are findable`() {
+        val e = listOf(entry("App.kt", "app/src/main/kotlin/App.kt"))
+        assertEquals(1, WorkspaceTree.filter(e, "kotlin").size)
+    }
+
+    @Test
+    fun `ext query filters by extension and keeps directories`() {
+        val e = listOf(entry("src", dir = true), entry("a.kt"), entry("b.kt"), entry("c.md"))
+        assertEquals(
+            listOf("src", "a.kt", "b.kt"),
+            WorkspaceTree.filter(e, "ext:kt").map { it.name },
+        )
+    }
+
+    @Test
+    fun `ext query tolerates a leading dot`() {
+        val e = listOf(entry("a.kt"))
+        assertEquals(1, WorkspaceTree.filter(e, "ext:.kt").size)
+    }
+
+    @Test
+    fun `isExtensionQuery recognises the prefix only`() {
+        assertTrue(WorkspaceTree.isExtensionQuery("ext:kt"))
+        assertTrue(WorkspaceTree.isExtensionQuery("EXT:KT"))
+        assertTrue(!WorkspaceTree.isExtensionQuery("kt"))
+    }
+
+    @Test
+    fun `filter preserves the incoming ordering`() {
+        val e = listOf(entry("z.kt"), entry("a.kt"))
+        assertEquals(listOf("z.kt", "a.kt"), WorkspaceTree.filter(e, ".kt").map { it.name })
+    }
+
+    @Test
+    fun `a query matching nothing returns an empty list`() {
+        assertTrue(WorkspaceTree.filter(listOf(entry("a.kt")), "zzz").isEmpty())
+    }
 }

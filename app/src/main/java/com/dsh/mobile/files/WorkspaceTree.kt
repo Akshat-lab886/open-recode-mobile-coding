@@ -168,4 +168,31 @@ object WorkspaceTree {
         bytes < 1024L * 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024))
         else -> String.format("%.1f GB", bytes / (1024.0 * 1024 * 1024))
     }
+
+    /**
+     * Filters [entries] by a free-text query.
+     *
+     * Two deliberate behaviours, both because a flat name match hides too much
+     * in a real repo:
+     *  - "ext:kt" (or "kt") filters by extension, because "find the Kotlin
+     *    files" is the single most common thing to want here.
+     *  - a bare word matches the name OR the path, so searching "main" finds
+     *    "app/src/main/kotlin/Main.kt" even though "main" is not in the name.
+     * Results keep the directories-first ordering of the source list, so the
+     * filter never reorders what the user was already looking at.
+     */
+    fun filter(entries: List<FileEntry>, query: String): List<FileEntry> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) return entries
+        val extPrefix = "ext:"
+        return if (q.startsWith(extPrefix)) {
+            val wanted = q.removePrefix(extPrefix).removePrefix(".").trim()
+            entries.filter { it.isDirectory || it.name.substringAfterLast('.', "").lowercase() == wanted }
+        } else {
+            entries.filter { it.name.lowercase().contains(q) || it.path.lowercase().contains(q) }
+        }
+    }
+
+    /** Whether [query] is an extension query, i.e. "ext:kt". */
+    fun isExtensionQuery(query: String): Boolean = query.trim().lowercase().startsWith("ext:")
 }

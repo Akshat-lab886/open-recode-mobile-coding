@@ -21,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -61,18 +62,38 @@ fun FilesPane(
 
     var dirPath by remember { mutableStateOf("") }
     var preview by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var query by remember { mutableStateOf("") }
 
     val listing = remember(dirPath, workspace) { WorkspaceTree.list(workspace, dirPath) }
+    // Filtering is pure and runs on the in-memory listing, so typing stays
+    // instant even deep in a large tree.
+    val entries = remember(listing, query) { WorkspaceTree.filter(listing.entries, query) }
 
     Column(modifier.fillMaxSize()) {
         FileBreadcrumbs(
             dirPath = dirPath,
             onNavigate = { dirPath = it },
         )
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("Search files, or ext:kt") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = DshTheme.tokens.spaceMd, vertical = DshTheme.tokens.spaceXs),
+            textStyle = MaterialTheme.typography.bodySmall,
+        )
         HorizontalDivider()
-        if (listing.entries.isEmpty()) {
+        if (entries.isEmpty()) {
             Text(
-                if (dirPath.isBlank()) "The workspace is empty." else "This folder is empty.",
+                when {
+                    // Saying "this folder is empty" while a search is active is
+                    // a lie - the folder has files, the query just missed them.
+                    query.isNotBlank() -> "No files match \"$query\"."
+                    dirPath.isBlank() -> "The workspace is empty."
+                    else -> "This folder is empty."
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(DshTheme.tokens.spaceLg),
@@ -95,7 +116,7 @@ fun FilesPane(
                         HorizontalDivider()
                     }
                 }
-                items(listing.entries, key = { it.path }) { entry ->
+                items(entries, key = { it.path }) { entry ->
                     FileRow(
                         entry = entry,
                         onClick = {
