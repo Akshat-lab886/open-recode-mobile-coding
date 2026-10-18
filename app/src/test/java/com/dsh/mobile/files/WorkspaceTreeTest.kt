@@ -222,4 +222,20 @@ class WorkspaceTreeTest {
     fun `a query matching nothing returns an empty list`() {
         assertTrue(WorkspaceTree.filter(listOf(entry("a.kt")), "zzz").isEmpty())
     }
+
+    @Test
+    fun `imageMime recognises common image extensions`() {
+        assertEquals("image/png", WorkspaceTree.imageMime("a/b/shot.PNG"))
+        assertEquals("image/jpeg", WorkspaceTree.imageMime("x.jpg"))
+        assertEquals("image/jpeg", WorkspaceTree.imageMime("x.jpeg"))
+        assertEquals("image/gif", WorkspaceTree.imageMime("x.gif"))
+        assertEquals("image/webp", WorkspaceTree.imageMime("x.webp"))
+    }
+
+    @Test
+    fun `imageMime is null for non-images and extensionless paths`() {
+        assertNull(WorkspaceTree.imageMime("notes.md"))
+        assertNull(WorkspaceTree.imageMime("Makefile"))
+        assertNull(WorkspaceTree.imageMime("dir.kt"))
+    }
 }

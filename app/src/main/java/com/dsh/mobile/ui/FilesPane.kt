@@ -71,7 +71,7 @@ fun FilesPane(
     }
 
     var dirPath by remember { mutableStateOf("") }
-    var preview by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var preview by remember { mutableStateOf<FilePreviewRequest?>(null) }
     var query by remember { mutableStateOf("") }
     var consumed by remember { mutableStateOf<String?>(null) }
 
@@ -87,8 +87,13 @@ fun FilesPane(
                 consumed = target
                 query = ""
                 val file = WorkspaceTree.resolve(workspace, target)
-                val text = file?.let { WorkspaceTree.preview(it) }
-                if (text != null) preview = target.substringAfterLast('/') to text
+                if (file != null) {
+                    preview = FilePreviewRequest(
+                        name = target.substringAfterLast('/'),
+                        file = file,
+                        textPreview = WorkspaceTree.preview(file),
+                    )
+                }
             }
         }
     }
@@ -155,8 +160,17 @@ fun FilesPane(
                                 // Resolve() is the traversal guard: the row can
                                 // only ever open a file under the workspace.
                                 val file = WorkspaceTree.resolve(workspace, entry.path)
-                                val text = file?.let { WorkspaceTree.preview(it) }
-                                preview = if (text != null) entry.name to text else null
+                                // textPreview is null for binary/oversized files;
+                                // the request is still made so an image renders and
+                                // a truly unopenable file says so rather than
+                                // swallowing the tap entirely.
+                                if (file != null) {
+                                    preview = FilePreviewRequest(
+                                        name = entry.name,
+                                        file = file,
+                                        textPreview = WorkspaceTree.preview(file),
+                                    )
+                                }
                             }
                         },
                     )
@@ -166,26 +180,31 @@ fun FilesPane(
         }
     }
 
-    preview?.let { (name, body) ->
+    preview?.let { req ->
         ModalBottomSheet(
             onDismissRequest = { preview = null },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
             Column(Modifier.fillMaxWidth().padding(DshTheme.tokens.spaceMd)) {
-                Text(name, style = MaterialTheme.typography.titleSmall, fontFamily = FontFamily.Monospace)
-                Text(
-                    body,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
+                Text(req.name, style = MaterialTheme.typography.titleSmall, fontFamily = FontFamily.Monospace)
+                FilePreviewBody(
+                    file = req.file,
+                    text = req.textPreview,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(vertical = DshTheme.tokens.spaceSm),
+                        .padding(vertical = DshTheme.tokens.spaceSm)
+                        .horizontalScroll(rememberScrollState()),
                 )
             }
         }
     }
 }
+
+/** One open-file request: the file itself, plus its text body when it has one. */
+data class FilePreviewRequest(
+    val name: String,
+    val file: File,
+    val textPreview: String?,
+)
 
 @Composable
 private fun FileBreadcrumbs(dirPath: String, onNavigate: (String) -> Unit) {

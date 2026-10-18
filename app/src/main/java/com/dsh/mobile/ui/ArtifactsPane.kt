@@ -54,7 +54,7 @@ fun ArtifactsPane(
     val entries = remember(configuredWorkspacePath) {
         WorkspaceTree.findByExtension(workspace, WorkspaceTree.ARTIFACT_EXTENSIONS)
     }
-    var preview by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var preview by remember { mutableStateOf<FilePreviewRequest?>(null) }
 
     if (entries.isEmpty()) {
         Text(
@@ -74,8 +74,16 @@ fun ArtifactsPane(
                         .fillMaxWidth()
                         .clickable {
                             val file = WorkspaceTree.resolve(workspace, entry.path)
-                            val text = file?.let { WorkspaceTree.preview(it) }
-                            preview = text?.let { entry.name to it }
+                            if (file != null) {
+                                // Images are the point of an artifact pane for a
+                                // lot of agents (diagrams, screenshots), so they
+                                // render rather than silently doing nothing.
+                                preview = FilePreviewRequest(
+                                    name = entry.name,
+                                    file = file,
+                                    textPreview = WorkspaceTree.preview(file),
+                                )
+                            }
                         }
                         .padding(horizontal = DshTheme.tokens.spaceMd, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(DshTheme.tokens.spaceSm),
@@ -98,21 +106,19 @@ fun ArtifactsPane(
         }
     }
 
-    preview?.let { (name, body) ->
+    preview?.let { req ->
         ModalBottomSheet(
             onDismissRequest = { preview = null },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
             Column(Modifier.fillMaxWidth().padding(DshTheme.tokens.spaceMd)) {
-                Text(name, style = MaterialTheme.typography.titleSmall, fontFamily = FontFamily.Monospace)
-                Text(
-                    body,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
+                Text(req.name, style = MaterialTheme.typography.titleSmall, fontFamily = FontFamily.Monospace)
+                FilePreviewBody(
+                    file = req.file,
+                    text = req.textPreview,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(vertical = DshTheme.tokens.spaceSm),
+                        .padding(vertical = DshTheme.tokens.spaceSm)
+                        .horizontalScroll(rememberScrollState()),
                 )
             }
         }

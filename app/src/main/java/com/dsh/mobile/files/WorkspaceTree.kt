@@ -195,4 +195,18 @@ object WorkspaceTree {
 
     /** Whether [query] is an extension query, i.e. "ext:kt". */
     fun isExtensionQuery(query: String): Boolean = query.trim().lowercase().startsWith("ext:")
+
+    /** Extensions the browser renders as an image rather than as text. */
+    val IMAGE_EXTENSIONS: Map<String, String> = mapOf(
+        "png" to "image/png",
+        "jpg" to "image/jpeg",
+        "jpeg" to "image/jpeg",
+        "gif" to "image/gif",
+        "webp" to "image/webp",
+        "bmp" to "image/bmp",
+    )
+
+    /** The image MIME type for [path], or null when it is not an image. */
+    fun imageMime(path: String): String? =
+        IMAGE_EXTENSIONS[path.substringAfterLast('.', "").lowercase()]
 }
