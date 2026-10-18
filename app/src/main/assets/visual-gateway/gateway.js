@@ -123,6 +123,11 @@ function classify(line) {
 /* Child process                                                       */
 /* ------------------------------------------------------------------ */
 let child = null;
+/**
+ * Grace period between announcing a child's exit over SSE and exiting
+ * ourselves, so an attached UI receives the event before the port closes.
+ */
+const EXIT_GRACE_MS = 250;
 let startedAt = Date.now();
 let lastActivityAt = Date.now();
 const seenPrompts = new Set();
@@ -153,8 +158,14 @@ function startChild() {
   child.on('exit', (code, signal) => {
     log('child exited', { code, signal });
     emit({ type: 'exit', code, signal });
-    // The service owns restarts; don't self-respawn (it would fight the
-    // watchdog and duplicate children).
+    // Follow the child down. The service owns restarts, but it waits on THIS
+    // process - so staying alive here means the service never learns the
+    // backend died, and the app sits on "Running" with a dead backend and no
+    // error anywhere (observed on-device with codex exiting immediately).
+    // Exiting lets the service's stratified restart, and its give-up path,
+    // actually run. Still no self-respawn: that WOULD fight the watchdog and
+    // duplicate children.
+    setTimeout(() => process.exit(code === 0 ? 0 : (code || 1)), EXIT_GRACE_MS);
   });
   child.on('error', (err) => {
     log('child error', err && err.message);

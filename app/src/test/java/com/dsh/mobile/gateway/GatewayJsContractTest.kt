@@ -56,6 +56,30 @@ class GatewayJsContractTest {
     }
 
     @Test
+    fun `gateway follows its child down so the service can restart it`() {
+        // The service's restart logic waits on THIS process, not on the backend
+        // CLI. If the gateway outlives its child, a dead backend is invisible:
+        // the app reads "Running" while the UI it serves is empty and no error
+        // is shown anywhere. Observed on-device with codex exiting immediately
+        // (no network): the status stayed Running with a dead backend.
+        val handler = gatewaySource()
+            .substringAfter("child.on('exit'")
+            .substringBefore("child.on('error'")
+        assertTrue(
+            "gateway must announce the exit to attached UIs:\n$handler",
+            handler.contains("type: 'exit'"),
+        )
+        assertTrue(
+            "gateway must exit when its child exits, or the service never learns:\n$handler",
+            handler.contains("process.exit("),
+        )
+        assertTrue(
+            "gateway must not self-respawn (it would fight the watchdog):\n$handler",
+            !handler.contains("startChild()"),
+        )
+    }
+
+    @Test
     fun `approval patterns include the allow-to-run wording`() {
         val block = patternLiterals("APPROVAL_PATTERNS").first()
         assertTrue(
