@@ -448,7 +448,11 @@ private fun CompactLayout(
                     .weight(1f)
                     .imePadding(),
                 )
-                // Native tab placeholders (filled in one per round below).
+                // Native tab surfaces (one per round as they are built).
+                DeckTab.DIFFS -> DiffsPane(
+                    configuredWorkspacePath = uiState.config.workspacePath,
+                    modifier = Modifier.weight(1f),
+                )
                 else -> DeckTabPlaceholder(
                     tab = deckTab,
                     uiState = uiState,
@@ -573,6 +577,10 @@ private fun ExpandedLayout(
                         onWebApproval = onWebApproval,
                         onRetryBoot = onRetryBoot,
                         modifier = Modifier.fillMaxSize().imePadding(),
+                    )
+                    DeckTab.DIFFS -> DiffsPane(
+                        configuredWorkspacePath = uiState.config.workspacePath,
+                        modifier = Modifier.fillMaxSize(),
                     )
                     else -> DeckTabPlaceholder(
                         tab = deckTab,
