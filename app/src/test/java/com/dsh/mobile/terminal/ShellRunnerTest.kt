@@ -83,4 +83,46 @@ class ShellRunnerTest {
         assertFalse(ShellRunner.isSubmittable("echo a\rb"))
         assertTrue(ShellRunner.isSubmittable("ls -la"))
     }
+
+    @Test
+    fun `append keeps output under the per-entry cap and says so`() {
+        val big = "x".repeat(TerminalTranscript.MAX_OUTPUT_CHARS + 500)
+        val out = TerminalTranscript.append(emptyList(), TerminalEntry("cat big", big, false))
+        val text = out.single().output
+        assertTrue(text.length < big.length)
+        assertTrue("an entry must never exceed the documented cap", text.length <= TerminalTranscript.MAX_OUTPUT_CHARS)
+        assertTrue("truncation must be visible", text.contains("truncated"))
+    }
+
+    @Test
+    fun `short output is left alone`() {
+        val out = TerminalTranscript.append(emptyList(), TerminalEntry("ls", "a\nb", false))
+        assertEquals("a\nb", out.single().output)
+    }
+
+    @Test
+    fun `the transcript keeps only the newest entries`() {
+        var acc = emptyList<TerminalEntry>()
+        repeat(TerminalTranscript.MAX_ENTRIES + 50) { i -> acc = TerminalTranscript.append(acc, TerminalEntry("cmd$i", "o", false)) }
+        assertEquals(TerminalTranscript.MAX_ENTRIES, acc.size)
+        // The survivors are the newest ones, in order.
+        assertEquals("cmd50", acc.first().command)
+        assertEquals("cmd${TerminalTranscript.MAX_ENTRIES + 49}", acc.last().command)
+    }
+
+    @Test
+    fun `memory is bounded no matter how long the session runs`() {
+        // 200 entries x 16KB cap is the ceiling regardless of input size.
+        var acc = emptyList<TerminalEntry>()
+        val huge = "y".repeat(200_000)
+        repeat(500) { acc = TerminalTranscript.append(acc, TerminalEntry("c$it", huge, false)) }
+        assertTrue("retained ${acc.sumOf { it.output.length }} chars", acc.sumOf { it.output.length } <=
+            TerminalTranscript.MAX_ENTRIES * TerminalTranscript.MAX_OUTPUT_CHARS)
+    }
+
+    @Test
+    fun `failed commands keep their flag`() {
+        val out = TerminalTranscript.append(emptyList(), TerminalEntry("boom", "err", true))
+        assertTrue(out.single().failed)
+    }
 }

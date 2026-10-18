@@ -36,14 +36,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.runtime.AgentRuntime
 import com.dsh.mobile.terminal.ShellRunner
+import com.dsh.mobile.terminal.TerminalEntry
+import com.dsh.mobile.terminal.TerminalTranscript
 import com.dsh.mobile.ui.theme.DshTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-
-/** One completed command and its output, as shown in the transcript. */
-private data class TermLine(val command: String, val output: String, val failed: Boolean)
 
 /**
  * Terminal: run shell commands in the workspace.
@@ -66,7 +65,7 @@ fun TerminalPane(
         else AgentRuntime.defaultWorkspace(context)
     }
 
-    val lines = remember { mutableStateListOf<TermLine>() }
+    val lines = remember { mutableStateListOf<TerminalEntry>() }
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -80,15 +79,22 @@ fun TerminalPane(
             // Shell work is blocking; it must never run on the main thread.
             val result = withContext(Dispatchers.IO) { ShellRunner.run(command, workspace) }
             val failed = result.exitCode != 0
-            lines += TermLine(
-                command = command,
-                output = when {
-                    result.timedOut -> "timed out after 30s"
-                    result.combined.isBlank() -> "(no output)"
-                    else -> result.combined.trimEnd()
-                },
-                failed = failed,
+            // Routed through TerminalTranscript so the scrollback stays
+            // bounded instead of growing for the life of the process.
+            val next = TerminalTranscript.append(
+                lines.toList(),
+                TerminalEntry(
+                    command = command,
+                    output = when {
+                        result.timedOut -> "timed out after 30s"
+                        result.combined.isBlank() -> "(no output)"
+                        else -> result.combined.trimEnd()
+                    },
+                    failed = failed,
+                ),
             )
+            lines.clear()
+            lines.addAll(next)
             busy = false
         }
     }

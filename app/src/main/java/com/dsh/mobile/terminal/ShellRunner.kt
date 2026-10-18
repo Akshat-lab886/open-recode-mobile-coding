@@ -117,3 +117,49 @@ object ShellRunner {
     fun isSubmittable(command: String): Boolean =
         command.isNotBlank() && !command.contains('\n') && !command.contains('\r')
 }
+
+/** One completed command and its output, as shown in the transcript. */
+data class TerminalEntry(val command: String, val output: String, val failed: Boolean)
+
+/**
+ * Bounds the Terminal transcript.
+ *
+ * ShellRunner caps a SINGLE command's output at 256KB, but the transcript is a
+ * long-lived Compose state list: a user running a hundred commands would retain
+ * tens of megabytes of scrollback for the life of the process. Both the number
+ * of entries and the length of each are bounded here, so the tab's memory is a
+ * constant rather than a function of how long the session has been open.
+ */
+object TerminalTranscript {
+
+    /** How many commands stay in the scrollback. */
+    const val MAX_ENTRIES: Int = 200
+
+    /** How much of each command's output is retained. */
+    const val MAX_OUTPUT_CHARS: Int = 16_000
+
+    /**
+     * Shortens [text] so the RESULT is never longer than [MAX_OUTPUT_CHARS].
+     *
+     * The notice is budgeted INSIDE the cap rather than appended past it. An
+     * earlier revision returned MAX_OUTPUT_CHARS plus a ~40 character notice,
+     * which made the documented per-entry cap a lie and the whole-transcript
+     * memory ceiling unprovable.
+     */
+    fun truncateOutput(text: String): String {
+        if (text.length <= MAX_OUTPUT_CHARS) return text
+        val notice = "\n... (truncated, ${text.length - MAX_OUTPUT_CHARS} more characters)"
+        val keep = (MAX_OUTPUT_CHARS - notice.length).coerceAtLeast(0)
+        return text.take(keep) + notice
+    }
+
+    /** [entry] appended to [existing], oldest evicted past [MAX_ENTRIES]. */
+    fun append(existing: List<TerminalEntry>, entry: TerminalEntry): List<TerminalEntry> {
+        val bounded = entry.copy(output = truncateOutput(entry.output))
+        val out = ArrayList<TerminalEntry>(existing.size + 1)
+        out += existing
+        out += bounded
+        // Keep the newest MAX_ENTRIES; drop the rest from the front.
+        return if (out.size <= MAX_ENTRIES) out else out.subList(out.size - MAX_ENTRIES, out.size).toList()
+    }
+}
