@@ -210,6 +210,7 @@ fun DshMobileShell(
                     filesRevealPath = path
                     deckTab = DeckTab.FILES
                 },
+                onRevealConsumed = { filesRevealPath = null },
                 onDeckTabSelected = { tab ->
                     deckTab = tab
                     // Settings is the one Deck tab that is an existing surface,
@@ -249,6 +250,7 @@ fun DshMobileShell(
                     filesRevealPath = path
                     deckTab = DeckTab.FILES
                 },
+                onRevealConsumed = { filesRevealPath = null },
                 onDeckTabSelected = { tab ->
                     deckTab = tab
                     // Settings is the one Deck tab that is an existing surface,
@@ -382,6 +384,7 @@ private fun CompactLayout(
     onDeckTabSelected: (DeckTab) -> Unit,
     filesRevealPath: String?,
     onOpenInFiles: (String) -> Unit,
+    onRevealConsumed: () -> Unit,
     onOpenControlCenter: () -> Unit,
     onTapStatus: () -> Unit,
     onRetryBoot: () -> Unit,
@@ -499,6 +502,7 @@ private fun CompactLayout(
                 DeckTab.FILES -> FilesPane(
                     configuredWorkspacePath = uiState.config.workspacePath,
                     revealPath = filesRevealPath,
+                    onRevealConsumed = onRevealConsumed,
                     modifier = Modifier.weight(1f),
                 )
                 DeckTab.TERMINAL -> TerminalPane(
@@ -538,6 +542,7 @@ private fun ExpandedLayout(
     onDeckTabSelected: (DeckTab) -> Unit,
     filesRevealPath: String?,
     onOpenInFiles: (String) -> Unit,
+    onRevealConsumed: () -> Unit,
     onOpenControlCenter: () -> Unit,
     onCloseControlCenter: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -655,6 +660,7 @@ private fun ExpandedLayout(
                     DeckTab.FILES -> FilesPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
                         revealPath = filesRevealPath,
+                        onRevealConsumed = onRevealConsumed,
                         modifier = Modifier.fillMaxSize(),
                     )
                     DeckTab.TERMINAL -> TerminalPane(

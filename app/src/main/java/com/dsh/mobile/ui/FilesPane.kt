@@ -61,6 +61,16 @@ fun FilesPane(
      * harness should remove.
      */
     revealPath: String? = null,
+    /**
+     * Called once the reveal has been handled, so the shell can clear it.
+     *
+     * Without this the request outlives its use: [revealPath] is shell state
+     * while the "already handled" marker is remembered INSIDE this pane, so it
+     * resets every time the tab leaves composition. The result was that after a
+     * single Open from Diffs, every later visit to Files replayed the jump and
+     * re-opened the preview sheet, hijacking the tab.
+     */
+    onRevealConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -95,6 +105,9 @@ fun FilesPane(
                     )
                 }
             }
+            // Handled (or unhandleable) either way: a request that cannot be
+            // satisfied must not be retried on every future visit.
+            onRevealConsumed()
         }
     }
 
