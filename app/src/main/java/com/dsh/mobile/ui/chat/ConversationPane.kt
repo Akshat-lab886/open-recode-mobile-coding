@@ -56,10 +56,15 @@ fun ConversationPane(
     // Follow the tail as content arrives. Keyed on the counts rather than the
     // whole state so a delta that only lengthens a message does not restart the
     // scroll animation on every token.
-    val itemCount = conversation.messages.size + conversation.pendingApprovals.size
-    LaunchedEffect(itemCount, conversation.awaitingAgent) {
-        if (itemCount > 0) {
-            runCatching { listState.animateScrollToItem(itemCount - 1) }
+    val rowCount = conversation.messages.size + conversation.pendingApprovals.size
+    // The typing indicator is its own row, so the last index is rowCount (not
+    // rowCount - 1) while it is showing. Getting this wrong scrolls to the
+    // second-to-last item and leaves the indicator just off-screen, which is the
+    // one thing it exists to disprove.
+    val lastIndex = if (conversation.awaitingAgent) rowCount else rowCount - 1
+    LaunchedEffect(rowCount, conversation.awaitingAgent) {
+        if (lastIndex >= 0) {
+            runCatching { listState.animateScrollToItem(lastIndex) }
         }
     }
 

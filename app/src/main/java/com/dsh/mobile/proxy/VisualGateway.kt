@@ -207,11 +207,40 @@ class VisualGateway(
             Regex("create file .{0,60}\\?"),
             Regex("apply diff"),
         )
-        val AFFIRMATIVE_TOKENS = mapOf(
-            ActiveAgent.CLAUDE_CODE to "yes",
-            ActiveAgent.CODEX to "y",
-            ActiveAgent.OPENCODE to "yes",
-            ActiveAgent.DEEPSEEK_HARNESS to "yes",
-        )
+        /** Single source of truth lives in [ApprovalTokens]. */
+        val AFFIRMATIVE_TOKENS: Map<ActiveAgent, String> get() = ApprovalTokens.AFFIRMATIVE_TOKENS
+
+    }
+}
+
+/**
+ * The line that answers an approval prompt for a given agent.
+ *
+ * A CLI approval is not an RPC: it is a line on stdin. The accepted token
+ * differs per tool (codex wants `y`, most want `yes`), so answering with the
+ * wrong one leaves the child blocked while the UI looks like it did something.
+ *
+ * Lives outside [VisualGateway] because the gateway is not the only caller:
+ * the native surface answers through `gateway.js`'s `/send` route, since
+ * gateway.js owns the child's stdin.
+ */
+object ApprovalTokens {
+
+    /** The affirmative stdin token per tool. Codex is the odd one out. */
+    val AFFIRMATIVE_TOKENS: Map<ActiveAgent, String> = mapOf(
+        ActiveAgent.CLAUDE_CODE to "yes",
+        ActiveAgent.CODEX to "y",
+        ActiveAgent.OPENCODE to "yes",
+        ActiveAgent.DEEPSEEK_HARNESS to "yes",
+        ActiveAgent.HERMES to "yes",
+        ActiveAgent.ANTIGRAVITY to "yes",
+    )
+
+    fun answerFor(agentId: String, approved: Boolean): String {
+        val affirmative = ActiveAgent.entries
+            .firstOrNull { it.id == agentId }
+            ?.let { AFFIRMATIVE_TOKENS[it] }
+            ?: "yes"
+        return if (approved) affirmative else "no"
     }
 }

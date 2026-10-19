@@ -168,6 +168,7 @@ fun DshMobileShell(
     val streamPort = (uiState.serviceStatus as? AgentRuntimeService.ServiceStatus.Running)?.port
     val chatController = rememberConversationController(
         streamPort = streamPort,
+        agentId = uiState.config.agent.id,
         onSend = onCommand,
         onApprovalResult = onApprovalResult,
     )

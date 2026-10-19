@@ -36,6 +36,25 @@ import kotlinx.coroutines.flow.update
 class ConversationController(
     private val send: (String) -> Unit,
     private val resolveApproval: (requestId: String, approved: Boolean) -> Unit,
+    /**
+     * Answers an approval by writing to the CLI's stdin through gateway.js.
+     *
+     * Separate from [resolveApproval] because they are different mechanisms:
+     * `resolveApproval` goes through `VisualGateway`, which this app never
+     * constructs, so it would silently do nothing for a gateway-backed agent.
+     * A gateway approval is answered on stdin, not by an in-process call.
+     */
+    private val answerGatewayApproval: (requestId: String, approved: Boolean) -> Unit = { _, _ -> },
+    /**
+     * Sends a message straight to a gateway-backed CLI's stdin.
+     *
+     * Required because the shell's normal dispatch is installed by
+     * [com.dsh.mobile.ui.AgentWebView] when the page attaches - and the native
+     * surface deliberately does not mount that page. Without this the composer
+     * would be inert exactly where it is most visible. Returns true when the
+     * gateway accepted it.
+     */
+    private val sendToGateway: (text: String) -> Boolean = { false },
 ) {
     private val _state = MutableStateFlow(Conversation())
     val state: StateFlow<Conversation> = _state.asStateFlow()
@@ -120,11 +139,18 @@ class ConversationController(
         if (text.isBlank()) return
         _state.update { ConversationReducer.userSaid(it, text) }
         echoes.expectEcho(text)
-        send(text)
+        // The gateway path is preferred when it applies: the shell's dispatch is
+        // only installed while the WebView is attached, so relying on it alone
+        // would leave the native composer unable to send anything.
+        val delivered = runCatching { sendToGateway(text) }.getOrDefault(false)
+        if (!delivered) send(text)
     }
 
     fun decide(requestId: String, approved: Boolean) {
         _state.update { ConversationReducer.toolResolved(it, requestId) }
+        // Both paths are attempted because the controller does not know which
+        // backend produced the prompt; the one that does not apply is a no-op.
+        answerGatewayApproval(requestId, approved)
         resolveApproval(requestId, approved)
     }
 
@@ -182,11 +208,26 @@ internal fun VisualGateway.ApprovalRequest.toApproval(): ToolApproval {
 @Composable
 fun rememberConversationController(
     streamPort: Int?,
+    agentId: String,
     onSend: (String) -> Unit,
     onApprovalResult: (requestId: String, approved: Boolean) -> Unit,
 ): ConversationController {
-    val controller = remember(onSend, onApprovalResult) {
-        ConversationController(send = onSend, resolveApproval = onApprovalResult)
+    val controller = remember(onSend, onApprovalResult, streamPort, agentId) {
+        ConversationController(
+            send = onSend,
+            resolveApproval = onApprovalResult,
+            answerGatewayApproval = { _, approved ->
+                val port = streamPort
+                if (port != null && port > 0) {
+                    com.dsh.mobile.runtime.GatewaySender.answer(port, agentId, approved)
+                }
+            },
+            sendToGateway = { text ->
+                val port = streamPort
+                port != null && port > 0 &&
+                    com.dsh.mobile.runtime.GatewaySender.send(port, text)
+            },
+        )
     }
     val scope = rememberCoroutineScope()
 
