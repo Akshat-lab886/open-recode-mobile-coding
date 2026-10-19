@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.dsh.mobile.runtime.AgentRuntime
 import com.dsh.mobile.terminal.ShellRunner
+import com.dsh.mobile.terminal.TerminalSessionHolder
 import com.dsh.mobile.terminal.TerminalEntry
 import com.dsh.mobile.terminal.TerminalTranscript
 import com.dsh.mobile.ui.theme.DshTheme
@@ -88,19 +89,37 @@ fun TerminalPane(
         input = ""
         busy = true
         scope.launch {
+            // A PERSISTENT session, so `cd` and exported variables survive to the
+            // next command. Held outside composition: a session remembered in
+            // composable state would reset whenever the user visited another tab,
+            // losing exactly the state it exists to keep.
+            val session = TerminalSessionHolder.sessionFor(workspace)
             // Shell work is blocking; it must never run on the main thread.
-            val result = withContext(Dispatchers.IO) { ShellRunner.run(command, workspace) }
+            val result = withContext(Dispatchers.IO) { session.run(command) }
             val failed = result.exitCode != 0
             // Routed through TerminalTranscript so the scrollback stays
             // bounded instead of growing for the life of the process.
             val next = TerminalTranscript.append(
                 lines.toList(),
                 TerminalEntry(
-                    command = command,
+                    // Marked when the shell had to be restarted, because such a
+                    // command did not inherit the previous `cd` or exports.
+                    command = if (result.restarted) "$command  (shell restarted)" else command,
                     output = when {
-                        result.timedOut -> "timed out after 30s"
-                        result.combined.isBlank() -> "(no output)"
-                        else -> result.combined.trimEnd()
+                        result.timedOut -> buildString {
+                            append("timed out after 30s")
+                            if (result.output.isNotBlank()) {
+                                append('\n')
+                                append(result.output.trimEnd())
+                            }
+                            // The session survives a timeout, and saying so
+                            // stops the user assuming the tab is broken.
+                            append("\n(session kept; the command was abandoned)")
+                        }
+                        result.failure != null ->
+                            "${result.failure}\n${result.output.trimEnd()}".trimEnd()
+                        result.output.isBlank() -> "(no output)"
+                        else -> result.output.trimEnd()
                     },
                     failed = failed,
                 ),

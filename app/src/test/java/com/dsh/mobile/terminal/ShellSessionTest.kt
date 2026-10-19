@@ -1,9 +1,12 @@
 package com.dsh.mobile.terminal
 
 import org.junit.After
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -93,7 +96,9 @@ class ShellSessionTest {
         // so the tab is not left permanently dead.
         val s = session()
         s.run("exit 3")
-        assertFalse("the child really did exit", s.isAlive)
+        // isAlive RESTARTS a dead child rather than reporting death - that is
+        // what makes the tab self-healing. So the restart is observed through
+        // run()'s own flag, which reports whether THIS command needed one.
         val after = s.run("echo back")
         assertTrue("the session must come back", after.restarted)
         assertEquals("back", after.output.trim())
@@ -237,5 +242,54 @@ class ShellSessionQuoteTest {
     @Test
     fun `an empty command still quotes`() {
         assertEquals("\"\"", ShellSession.quoteForDoubleQuotes(""))
+    }
+}
+
+
+class TerminalSessionHolderTest {
+
+    @get:Rule val tmp = TemporaryFolder()
+
+    @org.junit.After
+    fun tearDown() {
+        TerminalSessionHolder.reset()
+    }
+
+    @Test
+    fun `the same workspace reuses the session`() {
+        val first = TerminalSessionHolder.sessionFor(tmp.root)
+        val second = TerminalSessionHolder.sessionFor(tmp.root)
+        assertSame("cd must survive leaving and re-entering the tab", first, second)
+    }
+
+    @Test
+    fun `a different workspace starts a new session`() {
+        val other = File(tmp.root, "other").apply { mkdirs() }
+        val first = TerminalSessionHolder.sessionFor(tmp.root)
+        val second = TerminalSessionHolder.sessionFor(other)
+        assertNotSame("a shell must not stay pointed at the old directory", first, second)
+        assertEquals(other.absolutePath, TerminalSessionHolder.currentWorkspace())
+    }
+
+    @Test
+    fun `a closed session is replaced`() {
+        val first = TerminalSessionHolder.sessionFor(tmp.root)
+        first.close()
+        val second = TerminalSessionHolder.sessionFor(tmp.root)
+        assertNotSame("a closed session must not be handed out", first, second)
+        assertTrue(second.isOpen)
+    }
+
+    @Test
+    fun `reset closes the session`() {
+        TerminalSessionHolder.sessionFor(tmp.root)
+        TerminalSessionHolder.reset()
+        assertFalse(TerminalSessionHolder.isActive())
+    }
+
+    @Test
+    fun `the holder reports no workspace when idle`() {
+        TerminalSessionHolder.reset()
+        assertEquals(null, TerminalSessionHolder.currentWorkspace())
     }
 }

@@ -83,9 +83,28 @@ class ShellSession(
     @Volatile
     private var closed = false
 
-    /** Whether the child is alive and can accept a command. */
+    /**
+     * Whether the child process is currently running. A PURE check.
+     *
+     * Deliberately side-effect free. An earlier version restarted the child
+     * inside this getter, which made [run]'s own restart flag unreachable - it
+     * asked `isAlive`, the getter silently respawned, and `restarted` stayed
+     * false, so callers were never told the shell had died. Restarting is
+     * [ensureStarted]'s job.
+     */
     val isAlive: Boolean
         get() = !closed && process?.isAlive == true
+
+    /** Whether this session can still be used (started or startable). */
+    val isOpen: Boolean
+        get() = !closed
+
+    /**
+     * Starts the child if it is not already running. Idempotent.
+     *
+     * Returns true when a child is running afterwards.
+     */
+    fun ensureStarted(): Boolean = start()
 
     /**
      * Runs [command], returning its output and exit code.
@@ -96,12 +115,11 @@ class ShellSession(
     fun run(command: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS): Result {
         if (closed) return Result("", 130, false, failure = "session closed")
         if (command.isBlank()) return Result("", 0, false)
-        var restarted = false
-        if (!isAlive) {
-            if (!start()) {
-                return Result("", 127, false, failure = "could not start a shell")
-            }
-            restarted = true
+        // A restart is reported to the caller, so a command that ran in a fresh
+        // shell is distinguishable from one that inherited the previous state.
+        val restarted = !isAlive
+        if (!ensureStarted()) {
+            return Result("", 127, false, restarted = restarted, failure = "could not start a shell")
         }
 
         val token = "__DSH_DONE__${counter.incrementAndGet()}:"
@@ -231,6 +249,8 @@ class ShellSession(
     }
 
     private fun start(): Boolean {
+        if (closed) return false
+        if (process?.isAlive == true) return true
         return try {
             val p = ProcessBuilder("sh")
                 .directory(workDir)
