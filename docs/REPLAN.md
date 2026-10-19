@@ -117,10 +117,33 @@ not, and finding that out changed the work.
    showing an empty pane. Silent fallback reads as a bug; stated fallback reads
    as a limit.
 
-**Still open for native DSH:** a WebSocket mux client. `java.net.http`'s
-WebSocket is API 33+ against a `minSdk` of 29, and there is no OkHttp in the
-offline cache, so this needs a deliberate dependency decision, not a quick
-addition.
+**Still open for native DSH — now scoped precisely.** Inspecting the bundled
+`dsh-agent.tar.gz` found a real, documented Remote API, not just a web page:
+
+| Package | What it gives us |
+|---|---|
+| `dsh-api-session-controller` | `prompt`, `follow` (streaming), `list`, `page`, `fork`, `cancel`, `modelCatalog`, `selectModel`, `search` |
+| `dsh-api-gateway` | transport: one WebSocket mux at `/api/remote.mux` |
+| `dsh-host-webserver` | serves it, token-gated |
+
+`follow` returns an `AsyncIterable<SessionFollowFrame>` of `snapshot` + event
+entries, which is exactly the streaming the native pane needs, and `list`/`page`
+would give Phase 3 session continuity from the same connection. Only the `web`
+profile is bundled, so `dsh --profile headless` is not an option.
+
+The blocker is transport cost, and it is a real decision rather than a detail:
+`java.net.http`'s `WebSocket` is **API 33+** against a **minSdk of 29**, and
+there is no OkHttp in the offline dependency cache. Options, in order of
+preference:
+
+1. Add OkHttp (a network dependency fetch, and the only reason we need one).
+2. Hand-roll RFC 6455 over a plain socket — no dependency, but framing,
+   masking, ping/pong and fragmentation are ours to get right.
+3. Raise `minSdk` to 33 — drops real devices, so no.
+
+Not started: this is a multi-day protocol implementation (mux framing, token
+auth, event assembly, reconnection), and smuggling it into a polish round is
+what produced the current architecture. It needs its own round.
 
 **Verified so far:** the parsers (flat JSON, SSE framing, event mapping, echo
 reconciliation) are unit-tested — 528 tests. **Not verified:** anything on
