@@ -2,6 +2,7 @@ package com.dsh.mobile.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
@@ -59,6 +60,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -69,6 +71,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
@@ -82,6 +85,8 @@ import com.dsh.mobile.bootstrap.BootstrapManager
 import com.dsh.mobile.data.ActiveAgent
 import com.dsh.mobile.proxy.VisualGateway
 import com.dsh.mobile.service.AgentRuntimeService
+import com.dsh.mobile.ui.chat.ConversationPane
+import com.dsh.mobile.ui.chat.rememberConversationController
 import com.dsh.mobile.ui.theme.DshTheme
 import com.dsh.mobile.watchdog.EngineWatchdog
 
@@ -143,6 +148,28 @@ fun DshMobileShell(
     // cross-tab jump is meaningless after the process dies, and restoring it
     // would yank the user into Files on next launch.
     var filesRevealPath by remember { mutableStateOf<String?>(null) }
+    // A command handed to the Terminal tab by the chat's "Run" action. Cleared
+    // once consumed, so it cannot replay on a later visit to the tab.
+    var terminalCommand by remember { mutableStateOf<String?>(null) }
+
+    // The native conversation is the PRIMARY Chat surface (docs/REPLAN.md: the
+    // WebView stops being the centre of the app). The web UI stays one tap away
+    // for anything only it can do.
+    var nativeChat by rememberSaveable { mutableStateOf(true) }
+    val streamPort = (uiState.serviceStatus as? AgentRuntimeService.ServiceStatus.Running)?.port
+    val chatController = rememberConversationController(
+        streamPort = streamPort,
+        onSend = onCommand,
+        onApprovalResult = onApprovalResult,
+    )
+    val conversation by chatController.state.collectAsState()
+
+    // Code blocks offer Run; it belongs in the Terminal tab, where the command
+    // is visible with its output rather than hidden behind the chat.
+    val runInTerminal: (String) -> Unit = { command ->
+        terminalCommand = command
+        deckTab = DeckTab.TERMINAL
+    }
     var diagTaps by remember { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
 
@@ -211,6 +238,14 @@ fun DshMobileShell(
                     deckTab = DeckTab.FILES
                 },
                 onRevealConsumed = { filesRevealPath = null },
+                nativeChat = nativeChat,
+                onToggleNativeChat = { nativeChat = !nativeChat },
+                conversation = conversation,
+                onChatSubmit = chatController::submit,
+                onApprovalDecide = chatController::decide,
+                onRunInTerminal = runInTerminal,
+                terminalCommand = terminalCommand,
+                onTerminalCommandConsumed = { terminalCommand = null },
                 onDeckTabSelected = { tab ->
                     deckTab = tab
                     // Settings is the one Deck tab that is an existing surface,
@@ -251,6 +286,14 @@ fun DshMobileShell(
                     deckTab = DeckTab.FILES
                 },
                 onRevealConsumed = { filesRevealPath = null },
+                nativeChat = nativeChat,
+                onToggleNativeChat = { nativeChat = !nativeChat },
+                conversation = conversation,
+                onChatSubmit = chatController::submit,
+                onApprovalDecide = chatController::decide,
+                onRunInTerminal = runInTerminal,
+                terminalCommand = terminalCommand,
+                onTerminalCommandConsumed = { terminalCommand = null },
                 onDeckTabSelected = { tab ->
                     deckTab = tab
                     // Settings is the one Deck tab that is an existing surface,
@@ -385,6 +428,14 @@ private fun CompactLayout(
     filesRevealPath: String?,
     onOpenInFiles: (String) -> Unit,
     onRevealConsumed: () -> Unit,
+    nativeChat: Boolean,
+    onToggleNativeChat: () -> Unit,
+    conversation: com.dsh.mobile.chat.Conversation,
+    onChatSubmit: (String) -> Unit,
+    onApprovalDecide: (String, Boolean) -> Unit,
+    onRunInTerminal: (String) -> Unit,
+    terminalCommand: String?,
+    onTerminalCommandConsumed: () -> Unit,
     onOpenControlCenter: () -> Unit,
     onTapStatus: () -> Unit,
     onRetryBoot: () -> Unit,
@@ -474,24 +525,38 @@ private fun CompactLayout(
                 // native views over the workspace, so mounting the WebView for
                 // them would burn battery behind a screen the user cannot see.
                 DeckTab.CHAT -> Column(Modifier.weight(1f).fillMaxSize()) {
-                AgentStage(
-                uiState = uiState,
-                layout = layout,
-                onWebApproval = onWebApproval,
-                onRetryBoot = onRetryBoot,
-                // imePadding() is required, not cosmetic: with
-                // enableEdgeToEdge() the window is NOT resized for the keyboard on
-                // API 30+, and the page pins its composer with
-                // position:sticky;bottom:0, so without this the one control the
-                // user must reach sits under the IME.
-                modifier = Modifier
-                    .weight(1f)
-                    .imePadding(),
-                )
+                if (nativeChat) {
+                    ChatSurfaceHeader(native = true, onToggle = onToggleNativeChat)
+                    ConversationPane(
+                        conversation = conversation,
+                        onRunCode = onRunInTerminal,
+                        onApproval = onApprovalDecide,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    ChatSurfaceHeader(native = false, onToggle = onToggleNativeChat)
+                    AgentStage(
+                        uiState = uiState,
+                        layout = layout,
+                        onWebApproval = onWebApproval,
+                        onRetryBoot = onRetryBoot,
+                        // imePadding() is required, not cosmetic: with
+                        // enableEdgeToEdge() the window is NOT resized for the keyboard on
+                        // API 30+, and the page pins its composer with
+                        // position:sticky;bottom:0, so without this the one control the
+                        // user must reach sits under the IME.
+                        modifier = Modifier
+                            .weight(1f)
+                            .imePadding(),
+                    )
+                }
                     // Native composer under the agent surface. imePadding on the
                     // stage, not here: the bar must stay put while the field
                     // takes focus, or the layout jumps on every keystroke.
-                    ComposerBar(workspacePath = uiState.config.workspacePath, onSend = onCommand)
+                    ComposerBar(
+                        workspacePath = uiState.config.workspacePath,
+                        onSend = if (nativeChat) onChatSubmit else onCommand,
+                    )
                 }
                 // Native tab surfaces (one per round as they are built).
                 DeckTab.DIFFS -> DiffsPane(
@@ -507,6 +572,8 @@ private fun CompactLayout(
                 )
                 DeckTab.TERMINAL -> TerminalPane(
                     configuredWorkspacePath = uiState.config.workspacePath,
+                    pendingCommand = terminalCommand,
+                    onPendingConsumed = onTerminalCommandConsumed,
                     modifier = Modifier.weight(1f),
                 )
                 DeckTab.TASKS -> TasksPane(
@@ -543,6 +610,14 @@ private fun ExpandedLayout(
     filesRevealPath: String?,
     onOpenInFiles: (String) -> Unit,
     onRevealConsumed: () -> Unit,
+    nativeChat: Boolean,
+    onToggleNativeChat: () -> Unit,
+    conversation: com.dsh.mobile.chat.Conversation,
+    onChatSubmit: (String) -> Unit,
+    onApprovalDecide: (String, Boolean) -> Unit,
+    onRunInTerminal: (String) -> Unit,
+    terminalCommand: String?,
+    onTerminalCommandConsumed: () -> Unit,
     onOpenControlCenter: () -> Unit,
     onCloseControlCenter: () -> Unit,
     onOpenDiagnostics: () -> Unit,
@@ -643,14 +718,28 @@ private fun ExpandedLayout(
                 }
                 when (deckTab) {
                     DeckTab.CHAT -> Column(Modifier.fillMaxSize()) {
-                        AgentStage(
-                            uiState = uiState,
-                            layout = layout,
-                            onWebApproval = onWebApproval,
-                            onRetryBoot = onRetryBoot,
-                            modifier = Modifier.weight(1f).imePadding(),
+                        if (nativeChat) {
+                            ChatSurfaceHeader(native = true, onToggle = onToggleNativeChat)
+                            ConversationPane(
+                                conversation = conversation,
+                                onRunCode = onRunInTerminal,
+                                onApproval = onApprovalDecide,
+                                modifier = Modifier.weight(1f),
+                            )
+                        } else {
+                            ChatSurfaceHeader(native = false, onToggle = onToggleNativeChat)
+                            AgentStage(
+                                uiState = uiState,
+                                layout = layout,
+                                onWebApproval = onWebApproval,
+                                onRetryBoot = onRetryBoot,
+                                modifier = Modifier.weight(1f).imePadding(),
+                            )
+                        }
+                        ComposerBar(
+                            workspacePath = uiState.config.workspacePath,
+                            onSend = if (nativeChat) onChatSubmit else onCommand,
                         )
-                        ComposerBar(workspacePath = uiState.config.workspacePath, onSend = onCommand)
                     }
                     DeckTab.DIFFS -> DiffsPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
@@ -665,6 +754,8 @@ private fun ExpandedLayout(
                     )
                     DeckTab.TERMINAL -> TerminalPane(
                         configuredWorkspacePath = uiState.config.workspacePath,
+                        pendingCommand = terminalCommand,
+                        onPendingConsumed = onTerminalCommandConsumed,
                         modifier = Modifier.fillMaxSize(),
                     )
                     DeckTab.TASKS -> TasksPane(
@@ -729,6 +820,39 @@ private fun PanelHeader(title: String, onBack: () -> Unit) {
 }
 
 /** The agent surface plus its boot / error states, capped on wide windows. */
+/**
+ * The Native / Web UI switch above the Chat surface.
+ *
+ * Both surfaces stay available on purpose. The native one is the product, but
+ * the web UI is the only place some things exist (provider settings, the DSH
+ * session browser), so removing it would be a downgrade rather than a rewrite.
+ */
+@Composable
+private fun ChatSurfaceHeader(native: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = DshTheme.tokens.spaceMd, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (native) "Native" else "Web UI",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = if (native) "Switch to Web UI" else "Back to native",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.small)
+                .clickable(onClick = onToggle)
+                .padding(horizontal = DshTheme.tokens.spaceSm, vertical = 4.dp),
+        )
+    }
+}
+
 @Composable
 private fun AgentStage(
     uiState: ControlCenterState,

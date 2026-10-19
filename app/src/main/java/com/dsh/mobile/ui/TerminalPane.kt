@@ -22,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,17 @@ import java.io.File
 @Composable
 fun TerminalPane(
     configuredWorkspacePath: String,
+    /**
+     * A command to run on arrival, consumed once.
+     *
+     * Set by the chat surface's "Run" action on a code block. Consuming it is
+     * reported back via [onPendingConsumed] so the request is cleared by the
+     * shell that owns it - the same one-shot rule the Files reveal follows, and
+     * for the same reason: a request remembered inside this pane resets when the
+     * tab leaves composition, so it would replay on every later visit.
+     */
+    pendingCommand: String? = null,
+    onPendingConsumed: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -96,6 +108,15 @@ fun TerminalPane(
             lines.clear()
             lines.addAll(next)
             busy = false
+        }
+    }
+
+    LaunchedEffect(pendingCommand) {
+        val command = pendingCommand
+        if (command != null && command.isNotBlank()) {
+            input = command
+            submit(command)
+            onPendingConsumed()
         }
     }
 
