@@ -89,6 +89,44 @@ Replace the WebView as the primary path. Driven by the existing
 block, a tool request, approve, result — readable and actionable natively, with
 the WebView not involved. Screenshot-verified.
 
+### Phase 1 — what it actually took (measured)
+
+Recorded because the plan above assumed the event stream already existed. It did
+not, and finding that out changed the work.
+
+1. **`GatewayEventBus` is a dead bus.** `VisualGateway` is never constructed and
+   `onGatewayEvent` is never called, so nothing has ever emitted on it. A native
+   pane wired to that bus renders the user's own messages and never a reply.
+   Subscribing alone would have shipped a beautiful empty theatre.
+
+2. **The live stream is `gateway.js`'s SSE.** CLI agents boot *under*
+   `assets/visual-gateway/gateway.js`, which owns the child's stdin/stdout and
+   republishes parsed output on `GET /events` as
+   `{type: echo|message|approval|raw|exit|error}`, with a 200-event backlog
+   replayed to late subscribers. Reading that gives real agent output with **no
+   change to the launch path** — the surgical seam, as intended.
+
+3. **But it only exists for gateway-backed agents.** `dsh` and `opencode` boot
+   their own servers and never touch `gateway.js`. `dsh` additionally requires a
+   token from its printed entry URL (the bare origin answers 401) and speaks a
+   **WebSocket** mux at `/api/remote.mux`, not SSE. Since `dsh` is the default
+   agent, the native surface cannot be the only path yet.
+
+   Consequence: `ChatSurfacePolicy` grants the native transcript only to agents
+   that can fill it, and the header *states* the fallback reason rather than
+   showing an empty pane. Silent fallback reads as a bug; stated fallback reads
+   as a limit.
+
+**Still open for native DSH:** a WebSocket mux client. `java.net.http`'s
+WebSocket is API 33+ against a `minSdk` of 29, and there is no OkHttp in the
+offline cache, so this needs a deliberate dependency decision, not a quick
+addition.
+
+**Verified so far:** the parsers (flat JSON, SSE framing, event mapping, echo
+reconciliation) are unit-tested — 528 tests. **Not verified:** anything on
+hardware this round; the tablet was not attached to the host, so the
+screenshot gate is outstanding.
+
 ### Phase 2 — Real shell and real checkpoints
 
 - Persistent shell session (streaming stdout/stderr, stdin, cwd persistence,
