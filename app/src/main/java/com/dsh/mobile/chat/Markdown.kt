@@ -153,3 +153,69 @@ object Markdown {
     fun hasOpenFence(markdown: String): Boolean =
         markdown.lineSequence().count { FENCE.containsMatchIn(it) } % 2 == 1
 }
+
+/**
+ * A run of text with one style applied.
+ *
+ * Kept as data rather than an AnnotatedString so the rules are testable without
+ * a Compose runtime - the styling itself is the UI layer's job.
+ */
+sealed interface InlineSpan {
+    data class Text(val text: String) : InlineSpan
+    data class Code(val text: String) : InlineSpan
+    data class Bold(val text: String) : InlineSpan
+}
+
+/**
+ * Splits [text] into styled runs.
+ *
+ * Code spans win over bold, because agent replies are full of identifiers like
+ * `**kwargs` and `a_b_c`, and letting emphasis processing see those mangles
+ * exactly the text a developer is trying to read. An unmatched delimiter is
+ * emitted literally rather than swallowing the rest of the line.
+ */
+fun parseInline(text: String): List<InlineSpan> {
+    if (text.isEmpty()) return emptyList()
+    val out = ArrayList<InlineSpan>()
+    val plain = StringBuilder()
+    var i = 0
+    fun flushPlain() {
+        if (plain.isNotEmpty()) {
+            out += InlineSpan.Text(plain.toString())
+            plain.setLength(0)
+        }
+    }
+    while (i < text.length) {
+        val c = text[i]
+        if (c == '`') {
+            // Find the closing backtick on the same run; a lone backtick is literal.
+            val close = text.indexOf('`', i + 1)
+            if (close > i + 1) {
+                flushPlain()
+                out += InlineSpan.Code(text.substring(i + 1, close))
+                i = close + 1
+                continue
+            }
+            // Skip a run of backticks so "``" does not open a span.
+            while (i < text.length && text[i] == '`') { plain.append(text[i]); i++ }
+            continue
+        }
+        if (c == '*' && i + 1 < text.length && text[i + 1] == '*') {
+            val close = text.indexOf("**", i + 2)
+            if (close > i + 2) {
+                flushPlain()
+                out += InlineSpan.Bold(text.substring(i + 2, close))
+                i = close + 2
+                continue
+            }
+            // Unmatched: emit literally and move on rather than dropping it.
+            plain.append("**")
+            i += 2
+            continue
+        }
+        plain.append(c)
+        i++
+    }
+    flushPlain()
+    return out
+}

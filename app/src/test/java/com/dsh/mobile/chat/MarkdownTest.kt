@@ -164,4 +164,59 @@ class MarkdownTest {
         assertTrue(text.contains("- b"))
         assertTrue(text.contains("c"))
     }
+
+    @Test
+    fun `inline code is split out`() {
+        val spans = parseInline("run `npm test` now")
+        assertEquals(3, spans.size)
+        assertEquals("run ", (spans[0] as InlineSpan.Text).text)
+        assertEquals("npm test", (spans[1] as InlineSpan.Code).text)
+        assertEquals(" now", (spans[2] as InlineSpan.Text).text)
+    }
+
+    @Test
+    fun `bold is split out`() {
+        val spans = parseInline("this is **important** ok")
+        assertTrue(spans.any { it is InlineSpan.Bold && it.text == "important" })
+    }
+
+    @Test
+    fun `code wins over emphasis so identifiers survive`() {
+        // `**kwargs` is a Python identifier. Emphasis processing must not see
+        // it, or a developer reads mangled text in exactly the place they care.
+        val spans = parseInline("call `**kwargs` here")
+        assertEquals(1, spans.count { it is InlineSpan.Code })
+        assertEquals("**kwargs", spans.filterIsInstance<InlineSpan.Code>().single().text)
+        assertTrue(spans.none { it is InlineSpan.Bold })
+    }
+
+    @Test
+    fun `snake_case identifiers are untouched`() {
+        val spans = parseInline("see `a_b_c` and normal_text")
+        assertEquals("a_b_c", spans.filterIsInstance<InlineSpan.Code>().single().text)
+    }
+
+    @Test
+    fun `an unmatched backtick stays literal`() {
+        val spans = parseInline("a lone ` tick")
+        assertTrue(spans.none { it is InlineSpan.Code })
+        assertEquals("a lone ` tick", (spans.single() as InlineSpan.Text).text)
+    }
+
+    @Test
+    fun `an unmatched double star stays literal`() {
+        val spans = parseInline("unclosed **bold")
+        assertTrue(spans.none { it is InlineSpan.Bold })
+        assertEquals("unclosed **bold", (spans.single() as InlineSpan.Text).text)
+    }
+
+    @Test
+    fun `empty inline text yields no spans`() {
+        assertTrue(parseInline("").isEmpty())
+    }
+
+    @Test
+    fun `plain text is one span`() {
+        assertEquals(1, parseInline("nothing special").size)
+    }
 }

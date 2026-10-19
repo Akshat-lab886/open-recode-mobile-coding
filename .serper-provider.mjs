@@ -1,12 +1,18 @@
 /**
  * Serper (google.serper.dev) search provider for the DSH web seam.
  *
- * Serper speaks a different protocol from the shipped DeepSeek provider: a
- * plain POST to /search with an X-API-KEY header and a {q} body, returning
- * {organic:[{title,link,snippet,date}]}. The DeepSeek provider calls an
- * Anthropic-compatible /messages endpoint, so pointing it at serper.dev
- * yields 404 -- this plugin is the adapter that makes a Serper key usable.
+ * Two things this adapter exists to solve:
+ *  1. Serper speaks a different protocol from the shipped DeepSeek provider --
+ *     POST /search with an X-API-KEY header and a {q} body, returning
+ *     {organic:[{title,link,snippet,date}]}. The DeepSeek provider calls an
+ *     Anthropic-compatible /messages endpoint, so pointing it at serper.dev
+ *     yields 404.
+ *  2. Serper is slow to connect from some networks (measured 7-18s here).
+ *     Node's global fetch runs on undici, whose hard-coded 10s connect
+ *     timeout aborts before the server answers, so this uses node:https,
+ *     which has no such cap, with a caller-controlled deadline.
  */
+import https from 'node:https';
 import z from '@deepseek-ai/schemastery';
 import { WebError } from '@deepseek-ai/dsh-web';
 
@@ -20,7 +26,7 @@ export const Config = z.object({
   apiKey: z.string(),
   apiKeyEnv: z.string().default('SERPER_API_KEY'),
   baseURL: z.string().default('https://google.serper.dev'),
-  timeoutMs: z.number().default(20000),
+  timeoutMs: z.number().default(45000),
 });
 
 const MAX_NUM = 20;
@@ -47,6 +53,55 @@ function extractContent(data) {
   if (kg && kg.description) parts.push(String(kg.description));
   return parts.length ? parts.join('\n\n') : undefined;
 }
+
+/** Minimal JSON POST over node:https. No undici connect cap; caller sets the deadline. */
+function postJson(url, payload, headers, timeoutMs, signal) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const text = JSON.stringify(payload);
+    const req = https.request({
+      hostname: u.hostname,
+      port: u.port || 443,
+      path: u.pathname + u.search,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(text) },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({
+        statusCode: res.statusCode || 0,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+
+    const timer = setTimeout(() => {
+      req.destroy(new Error('Serper request exceeded ' + timeoutMs + 'ms'));
+    }, timeoutMs);
+
+    const onAbort = () => req.destroy(new Error('cancelled'));
+    if (signal) {
+      if (signal.aborted) {
+        clearTimeout(timer);
+        reject(new Error('cancelled'));
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      reject(err);
+    });
+    req.on('close', () => {
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    });
+
+    req.end(text);
+  });
+}
+
 class SerperSearchProvider {
   constructor(options) {
     this.id = options.providerId;
@@ -75,13 +130,13 @@ class SerperSearchProvider {
     const url = this.options.baseURL.replace(/\/+$/, '') + '/search';
     let res;
     try {
-      const timeout = AbortSignal.timeout(this.options.timeoutMs);
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      });
+      res = await postJson(
+        url,
+        body,
+        { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+        this.options.timeoutMs,
+        signal
+      );
     } catch (cause) {
       const msg = cause && cause.message ? cause.message : String(cause);
       throw new WebError(
@@ -91,21 +146,31 @@ class SerperSearchProvider {
       );
     }
 
-    if (!res.ok) {
-      const detail = (await res.text().catch(() => '')).slice(0, 200);
-      const hint = res.status === 401 || res.status === 403
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      const detail = res.body.slice(0, 200);
+      const hint = res.statusCode === 401 || res.statusCode === 403
         ? ' The Serper API key looks invalid or unauthorized.'
-        : res.status === 429
+        : res.statusCode === 429
           ? ' Serper rate limit or quota reached.'
           : '';
       throw new WebError(
-        'Serper search failed with HTTP ' + res.status + '.' + hint +
+        'Serper search failed with HTTP ' + res.statusCode + '.' + hint +
         (detail ? ' Response: ' + detail : ''),
         'WEB_PROVIDER_ERROR'
       );
     }
 
-    const data = await res.json();
+    let data;
+    try {
+      data = JSON.parse(res.body);
+    } catch (cause) {
+      throw new WebError(
+        'Serper returned a non-JSON body: ' + res.body.slice(0, 200),
+        'WEB_PROVIDER_ERROR',
+        cause === undefined ? undefined : { cause }
+      );
+    }
+
     const organic = Array.isArray(data.organic) ? data.organic : [];
     const sources = organic
       .filter((o) => o && typeof o.link === 'string' && o.link.length > 0)
