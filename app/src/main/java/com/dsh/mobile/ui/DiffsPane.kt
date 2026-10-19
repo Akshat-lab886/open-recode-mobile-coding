@@ -126,6 +126,11 @@ fun DiffsPane(
                 // point where a restorable checkpoint is most valuable, and the
                 // only one that is naturally triggered.
                 val cp = checkpoints.save(state.current)
+                // Prune on every save. Checkpoints are content-addressed and
+                // cheap, but nothing else ever calls prune, so without this the
+                // store grows without bound for the life of the install - on a
+                // device whose whole problem is tight storage.
+                runCatching { checkpoints.prune(CheckpointStore.DEFAULT_KEEP) }
                 checkpointNotice = if (cp != null) {
                     "Checkpoint ${cp.id.take(8)} saved (${cp.fileCount} files)"
                 } else {

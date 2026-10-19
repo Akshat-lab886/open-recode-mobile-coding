@@ -185,6 +185,54 @@ class CheckpointStoreTest {
     }
 
     @Test
+    fun `prune keeps every object a SURVIVING checkpoint references`() {
+        // The subtle failure: objects are shared, so a naive prune deletes an
+        // object that the older surviving checkpoint still needs, silently
+        // breaking a restore that used to work.
+        val ws = workspace()
+        write(File(ws, "shared.txt"), "shared-content")
+        val store = store()
+        val older = store.save(snapshotOf(ws))!!
+        write(File(ws, "other.txt"), "other")
+        val newer = store.save(snapshotOf(ws))!!
+
+        store.prune(keep = 2)
+
+        // Both must still restore their own content.
+        write(File(ws, "shared.txt"), "tampered")
+        store.restore(older.id, ws)
+        assertEquals("shared-content", File(ws, "shared.txt").readText())
+
+        write(File(ws, "shared.txt"), "tampered-again")
+        store.restore(newer.id, ws)
+        assertEquals("shared-content", File(ws, "shared.txt").readText())
+    }
+
+    @Test
+    fun `prune frees objects that no checkpoint references`() {
+        // Counts OBJECTS, not bytes: the replacement content may be longer than
+        // the original, so total bytes can legitimately rise even when garbage
+        // collection worked perfectly. An earlier version of this test asserted
+        // on bytes and failed for exactly that reason.
+        val ws = workspace()
+        val store = store()
+        val objectsDir = File(tmp.root, "checkpoints/objects")
+        write(File(ws, "a.txt"), "only-in-first")
+        store.save(snapshotOf(ws))
+        write(File(ws, "a.txt"), "second-version")
+        store.save(snapshotOf(ws))
+        assertEquals("two versions, two objects", 2, objectsDir.listFiles()?.size)
+
+        store.prune(keep = 1)
+
+        assertEquals(
+            "the unreferenced object must be freed",
+            1,
+            objectsDir.listFiles()?.size,
+        )
+    }
+
+    @Test
     fun `a missing checkpoint restores nothing rather than throwing`() {
         assertEquals(emptyList<String>(), store().restore("does-not-exist", workspace()))
     }
