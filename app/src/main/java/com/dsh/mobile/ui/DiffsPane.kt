@@ -87,7 +87,9 @@ fun DiffsPane(
     // Kept beside the baseline (not inside the workspace) so a scan never
     // reports the checkpoint store as a change to itself.
     val checkpoints = remember(workspace) {
-        CheckpointStore(File(workspace.parentFile, "checkpoints"))
+        // Per-workspace: a shared store would let a restore in one project
+        // delete files in another.
+        CheckpointStore(CheckpointStore.directoryFor(workspace))
     }
     var checkpointNotice by remember { mutableStateOf<String?>(null) }
 

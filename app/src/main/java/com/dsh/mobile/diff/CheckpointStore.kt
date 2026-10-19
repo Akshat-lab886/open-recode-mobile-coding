@@ -142,12 +142,26 @@ class CheckpointStore(private val root: File) {
         }
     }
 
-    /** All checkpoint ids, newest first. */
-    fun list(): List<String> =
-        trees.listFiles { f -> f.isFile && f.name.endsWith(".txt") }
+    /**
+     * All checkpoint ids, newest first.
+     *
+     * `latest.txt` is authoritative for which is newest, and is placed first.
+     * Ordering purely by file mtime is NOT reliable: saving several checkpoints
+     * within the same second gives them identical timestamps, so the order is
+     * arbitrary - and [prune] keeps the first [keep] entries, which would let it
+     * delete the newest checkpoint instead of the oldest. That is data loss, not
+     * a cosmetic ordering issue.
+     */
+    fun list(): List<String> {
+        val all = trees.listFiles { f -> f.isFile && f.name.endsWith(".txt") }
             ?.sortedByDescending { it.lastModified() }
             ?.map { it.name.removeSuffix(".txt") }
             ?: emptyList()
+        val newest = runCatching { latestFile.readText().trim() }.getOrNull()
+        if (newest.isNullOrEmpty() || newest !in all) return all
+        // Pin the authoritative newest to the front, keeping the rest stable.
+        return listOf(newest) + all.filter { it != newest }
+    }
 
     /** The manifest entries for [id]. */
     fun entries(id: String): List<Entry> {
@@ -243,6 +257,21 @@ class CheckpointStore(private val root: File) {
 
     companion object {
         private const val TAG = "CheckpointStore"
+
+        /**
+         * The store directory for [workspace].
+         *
+         * Keyed on the workspace's ABSOLUTE PATH, not `workspace.parentFile`.
+         * The default workspace is `files/workspaces` itself (not a child of
+         * it), so its parent is `files/` - which every other workspace also has
+         * as a parent. Using the parent would give unrelated workspaces ONE
+         * shared checkpoint history, so restoring in one could delete files in
+         * another.
+         */
+        fun directoryFor(workspace: File): File {
+            val key = sha256(workspace.absolutePath.toByteArray()).take(16)
+            return File(File(workspace.parentFile, "checkpoints"), key)
+        }
 
         /** How many checkpoints to keep by default. */
         const val DEFAULT_KEEP: Int = 20
