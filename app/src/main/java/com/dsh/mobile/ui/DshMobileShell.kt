@@ -155,7 +155,16 @@ fun DshMobileShell(
     // The native conversation is the PRIMARY Chat surface (docs/REPLAN.md: the
     // WebView stops being the centre of the app). The web UI stays one tap away
     // for anything only it can do.
-    var nativeChat by rememberSaveable { mutableStateOf(true) }
+    // Which surface the agent actually supports, decided by measured fact rather
+    // than preference: dsh and opencode never touch gateway.js, so they have no
+    // stream for the native pane to read. Showing it anyway would render the
+    // user's own messages and never a reply.
+    val chatSurface = com.dsh.mobile.chat.ChatSurface.forAgent(uiState.config.agent.id)
+    val nativeAvailable = chatSurface == com.dsh.mobile.chat.ChatSurface.NATIVE
+    // The user's choice is honoured only where it is possible; the saveable flag
+    // remembers the preference for the agents that can stream.
+    var preferNativeChat by rememberSaveable { mutableStateOf(true) }
+    val nativeChat = nativeAvailable && preferNativeChat
     val streamPort = (uiState.serviceStatus as? AgentRuntimeService.ServiceStatus.Running)?.port
     val chatController = rememberConversationController(
         streamPort = streamPort,
@@ -239,7 +248,12 @@ fun DshMobileShell(
                 },
                 onRevealConsumed = { filesRevealPath = null },
                 nativeChat = nativeChat,
-                onToggleNativeChat = { nativeChat = !nativeChat },
+                nativeAvailable = nativeAvailable,
+                chatSurfaceReason = com.dsh.mobile.chat.ChatSurface.reasonFor(
+                    uiState.config.agent.id,
+                    chatSurface,
+                ),
+                onToggleNativeChat = { preferNativeChat = !preferNativeChat },
                 conversation = conversation,
                 onChatSubmit = chatController::submit,
                 onApprovalDecide = chatController::decide,
@@ -287,7 +301,12 @@ fun DshMobileShell(
                 },
                 onRevealConsumed = { filesRevealPath = null },
                 nativeChat = nativeChat,
-                onToggleNativeChat = { nativeChat = !nativeChat },
+                nativeAvailable = nativeAvailable,
+                chatSurfaceReason = com.dsh.mobile.chat.ChatSurface.reasonFor(
+                    uiState.config.agent.id,
+                    chatSurface,
+                ),
+                onToggleNativeChat = { preferNativeChat = !preferNativeChat },
                 conversation = conversation,
                 onChatSubmit = chatController::submit,
                 onApprovalDecide = chatController::decide,
@@ -429,6 +448,8 @@ private fun CompactLayout(
     onOpenInFiles: (String) -> Unit,
     onRevealConsumed: () -> Unit,
     nativeChat: Boolean,
+    nativeAvailable: Boolean,
+    chatSurfaceReason: String,
     onToggleNativeChat: () -> Unit,
     conversation: com.dsh.mobile.chat.Conversation,
     onChatSubmit: (String) -> Unit,
@@ -526,7 +547,12 @@ private fun CompactLayout(
                 // them would burn battery behind a screen the user cannot see.
                 DeckTab.CHAT -> Column(Modifier.weight(1f).fillMaxSize()) {
                 if (nativeChat) {
-                    ChatSurfaceHeader(native = true, onToggle = onToggleNativeChat)
+                    ChatSurfaceHeader(
+                        native = true,
+                        nativeAvailable = nativeAvailable,
+                        reason = chatSurfaceReason,
+                        onToggle = onToggleNativeChat,
+                    )
                     ConversationPane(
                         conversation = conversation,
                         onRunCode = onRunInTerminal,
@@ -534,7 +560,12 @@ private fun CompactLayout(
                         modifier = Modifier.weight(1f),
                     )
                 } else {
-                    ChatSurfaceHeader(native = false, onToggle = onToggleNativeChat)
+                    ChatSurfaceHeader(
+                        native = false,
+                        nativeAvailable = nativeAvailable,
+                        reason = chatSurfaceReason,
+                        onToggle = onToggleNativeChat,
+                    )
                     AgentStage(
                         uiState = uiState,
                         layout = layout,
@@ -611,6 +642,8 @@ private fun ExpandedLayout(
     onOpenInFiles: (String) -> Unit,
     onRevealConsumed: () -> Unit,
     nativeChat: Boolean,
+    nativeAvailable: Boolean,
+    chatSurfaceReason: String,
     onToggleNativeChat: () -> Unit,
     conversation: com.dsh.mobile.chat.Conversation,
     onChatSubmit: (String) -> Unit,
@@ -719,7 +752,12 @@ private fun ExpandedLayout(
                 when (deckTab) {
                     DeckTab.CHAT -> Column(Modifier.fillMaxSize()) {
                         if (nativeChat) {
-                            ChatSurfaceHeader(native = true, onToggle = onToggleNativeChat)
+                            ChatSurfaceHeader(
+                        native = true,
+                        nativeAvailable = nativeAvailable,
+                        reason = chatSurfaceReason,
+                        onToggle = onToggleNativeChat,
+                    )
                             ConversationPane(
                                 conversation = conversation,
                                 onRunCode = onRunInTerminal,
@@ -727,7 +765,12 @@ private fun ExpandedLayout(
                                 modifier = Modifier.weight(1f),
                             )
                         } else {
-                            ChatSurfaceHeader(native = false, onToggle = onToggleNativeChat)
+                            ChatSurfaceHeader(
+                        native = false,
+                        nativeAvailable = nativeAvailable,
+                        reason = chatSurfaceReason,
+                        onToggle = onToggleNativeChat,
+                    )
                             AgentStage(
                                 uiState = uiState,
                                 layout = layout,
@@ -828,28 +871,45 @@ private fun PanelHeader(title: String, onBack: () -> Unit) {
  * session browser), so removing it would be a downgrade rather than a rewrite.
  */
 @Composable
-private fun ChatSurfaceHeader(native: Boolean, onToggle: () -> Unit) {
+private fun ChatSurfaceHeader(
+    native: Boolean,
+    nativeAvailable: Boolean,
+    reason: String,
+    onToggle: () -> Unit,
+) {
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = DshTheme.tokens.spaceMd, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = if (native) "Native" else "Web UI",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = if (native) "Switch to Web UI" else "Back to native",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .clip(MaterialTheme.shapes.small)
-                .clickable(onClick = onToggle)
-                .padding(horizontal = DshTheme.tokens.spaceSm, vertical = 4.dp),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = if (native) "Native" else "Web UI",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!native) {
+                // Say WHY the native pane is unavailable. A silent fallback
+                // reads as a bug; a stated one reads as a limit.
+                Text(
+                    text = reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                )
+            }
+        }
+        if (nativeAvailable) {
+            Text(
+                text = if (native) "Switch to Web UI" else "Back to native",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.small)
+                    .clickable(onClick = onToggle)
+                    .padding(horizontal = DshTheme.tokens.spaceSm, vertical = 4.dp),
+            )
+        }
     }
 }
 
