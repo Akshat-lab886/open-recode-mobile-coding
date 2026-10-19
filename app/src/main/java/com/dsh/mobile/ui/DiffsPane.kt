@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import com.dsh.mobile.diff.DiffKind
 import com.dsh.mobile.diff.DiffLine
 import com.dsh.mobile.diff.FileSnapshot
+import com.dsh.mobile.diff.CheckpointStore
 import com.dsh.mobile.diff.WorkspaceBaselineStore
 import com.dsh.mobile.diff.WorkspaceChanges
 import com.dsh.mobile.diff.WorkspaceDiff
@@ -81,6 +82,14 @@ fun DiffsPane(
     val store = remember(workspace) {
         WorkspaceBaselineStore(File(workspace.parentFile, "workspace-baseline.txt"))
     }
+    // Checkpoints are what make "what changed" recoverable. The baseline above
+    // answers the question; this is the thing that can put the workspace back.
+    // Kept beside the baseline (not inside the workspace) so a scan never
+    // reports the checkpoint store as a change to itself.
+    val checkpoints = remember(workspace) {
+        CheckpointStore(File(workspace.parentFile, "checkpoints"))
+    }
+    var checkpointNotice by remember { mutableStateOf<String?>(null) }
 
     var state by remember { mutableStateOf(DiffsState()) }
     var expanded by remember { mutableStateOf<String?>(null) }
@@ -113,16 +122,53 @@ fun DiffsPane(
             state = state,
             onAccept = {
                 store.save(state.current)
+                // Accepting is the moment the user says "this is good" - the one
+                // point where a restorable checkpoint is most valuable, and the
+                // only one that is naturally triggered.
+                val cp = checkpoints.save(state.current)
+                checkpointNotice = if (cp != null) {
+                    "Checkpoint ${cp.id.take(8)} saved (${cp.fileCount} files)"
+                } else {
+                    "Checkpoint could not be saved"
+                }
                 expanded = null
                 state = state.copy(hasBaseline = true)
             },
             onSetBaseline = {
                 store.save(state.current)
+                checkpoints.save(state.current)
                 expanded = null
                 state = state.copy(hasBaseline = true, changes = WorkspaceChanges(
                     emptyList(), emptyList(), emptyList(), state.current.keys.sorted()))
             },
         )
+        // The checkpoint outcome is reported rather than swallowed: a save that
+        // silently failed would leave the user believing they have a restore
+        // point they do not have.
+        checkpointNotice?.let { notice ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                    .padding(horizontal = DshTheme.tokens.spaceMd, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    notice,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "Dismiss",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable { checkpointNotice = null }
+                        .padding(horizontal = DshTheme.tokens.spaceSm, vertical = 2.dp),
+                )
+            }
+        }
         HorizontalDivider()
         when {
             state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
