@@ -78,7 +78,10 @@ fun TerminalPane(
         else AgentRuntime.defaultWorkspace(context)
     }
 
-    val lines = remember { mutableStateListOf<TerminalEntry>() }
+    // The transcript belongs to the workspace it was produced in. Showing one
+    // project's output above another project's prompt is actively misleading, so
+    // the scrollback is cleared when the workspace changes.
+    val lines = remember(workspace.absolutePath) { mutableStateListOf<TerminalEntry>() }
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()

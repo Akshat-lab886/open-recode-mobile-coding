@@ -112,6 +112,12 @@ class AgentRuntimeService : LifecycleService() {
 
     override fun onDestroy() {
         stopChild()
+        // The Terminal's shell is a separate long-lived child that nothing else
+        // owns. Without this it survives the service as an orphan, holding a
+        // workspace directory and a process slot the device may not be able to
+        // spare - the device is already tight enough to cap concurrency at one
+        // agent.
+        com.dsh.mobile.terminal.TerminalSessionHolder.reset()
         ServiceHolder.service = null
         super.onDestroy()
     }
